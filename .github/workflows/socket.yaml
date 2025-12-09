@@ -32,7 +32,7 @@ jobs:
         run: npm install -g socket
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --force
 
       
       - name: Run Socket Security Scan
