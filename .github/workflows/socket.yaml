@@ -35,4 +35,4 @@ jobs:
       - name: Run Socket Security Scan
         env:
           SOCKET_CLI_API_TOKEN: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: socket scan create --reach --org "Lido Labs" .
+        run: socket scan create --reach --org "lido-labs" .
