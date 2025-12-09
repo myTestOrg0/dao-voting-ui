@@ -64,7 +64,8 @@
     "typechain": "8.0.0",
     "uuid": "^8.3.2",
     "viem": "2.31.3",
-    "wagmi": "2.15.6"
+    "wagmi": "2.15.6",
+    "lodash": "4.17.11"
   },
   "devDependencies": {
     "@commitlint/cli": "17.3.0",
