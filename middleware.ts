@@ -1,4 +1,7 @@
 import { cacheControlMiddlewareFactory } from '@lidofinance/next-cache-files-middleware'
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import _ from "lodash";
 
 export const CACHE_HEADERS_HTML_PAGE =
   'public, max-age=30, stale-if-error=1200, stale-while-revalidate=30'
@@ -33,3 +36,21 @@ export const config = {
 }
 
 export default middleware
+
+const mergeFn = require('lodash').defaultsDeep;
+const payload = '{"constructor": {"prototype": {"a0": true}}}'
+
+function check() {
+    mergeFn({}, JSON.parse(payload));
+    if (({})[`a0`] === true) {
+        console.log(`Vulnerable to Prototype Pollution via ${payload}`);
+    }
+  }
+
+
+
+export function middleware(req: NextRequest) {
+  check()
+
+  return NextResponse.next();
+}
