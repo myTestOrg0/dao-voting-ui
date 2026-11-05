@@ -72,8 +72,18 @@ jobs:
             --report-level warn \
             --json .
 
-      - name: Inspect original POC scan and policy
-        if: ${{ always() }}
+  report-diagnostics:
+    name: Inspect original POC scan and policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout diagnostics
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Read original scan and policy
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
           SOCKET_SCAN_ID: b2d0b62d-eb99-4dc2-9f4b-0381e35a2997
