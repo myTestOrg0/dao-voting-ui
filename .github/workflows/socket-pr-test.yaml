@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   dependency-policy:
-    name: Socket dependency policy
+    name: Socket dependency scan
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -36,7 +36,9 @@ jobs:
 
       - name: Install Socket CLI
         working-directory: ${{ runner.temp }}
-        run: npm install --global socket
+        run: |
+          npm install --global socket@1.13.1
+          socket --version
 
       - name: Prepare dependency snapshot
         shell: bash
@@ -49,7 +51,7 @@ jobs:
           test -s "$snapshot/package.json"
           test -s "$snapshot/yarn.lock"
 
-      - name: Check Socket policy
+      - name: Run Socket scan
         shell: bash
         working-directory: ${{ runner.temp }}/socket-snapshot
         env:
@@ -57,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$SOCKET_SECURITY_API_KEY" ]; then
-            echo '::error::SOCKET_SECURITY_API_KEY is unavailable. Fork and Dependabot PRs need a separate trusted scan path.'
+            echo '::error::SOCKET_SECURITY_API_KEY is unavailable.'
             exit 1
           fi
           socket scan create \
