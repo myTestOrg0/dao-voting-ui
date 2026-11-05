@@ -1,41 +1,71 @@
-# Socket Security GitHub Actions Workflow
-# This workflow runs Socket Security scans on every commit to any branch
-# It automatically detects git repository information and handles different event types
+name: Socket dependency policy
 
-name: socket-security-workflow
-run-name: Reachability check
+'on':
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
-on:
-  workflow_dispatch
+permissions:
+  contents: read
 
-# Prevent concurrent runs for the same commit
 concurrency:
-  group: socket-scan-${{ github.ref }}-${{ github.sha }}
+  group: socket-policy-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  socket-security:
-    permissions:
-      issues: write
-      contents: read
-      pull-requests: write
+  dependency-policy:
+    name: Socket dependency policy
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 20
+    env:
+      SCAN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-python@v5
+      - name: Checkout candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          python-version: "pypy3.10"
-      
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+
       - name: Install Socket CLI
-        run: npm install -g socket
+        working-directory: ${{ runner.temp }}
+        run: npm install --global socket
 
-      - name: Install dependencies
-        run: npm install --force
+      - name: Prepare dependency snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot="$RUNNER_TEMP/socket-snapshot"
+          mkdir -p "$snapshot"
+          git show "${SCAN_SHA}:package.json" > "$snapshot/package.json"
+          git show "${SCAN_SHA}:yarn.lock" > "$snapshot/yarn.lock"
+          test -s "$snapshot/package.json"
+          test -s "$snapshot/yarn.lock"
 
-      
-      - name: Run Socket Security Scan
+      - name: Check Socket policy
+        shell: bash
+        working-directory: ${{ runner.temp }}/socket-snapshot
         env:
-          SOCKET_CLI_API_TOKEN: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: socket scan create --reach --org "lido-labs" .
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SOCKET_SECURITY_API_KEY" ]; then
+            echo '::error::SOCKET_SECURITY_API_KEY is unavailable. Fork and Dependabot PRs need a separate trusted scan path.'
+            exit 1
+          fi
+          socket scan create \
+            --org lido-labs \
+            --repo dao-voting-ui \
+            --branch "$SCAN_BRANCH" \
+            --commit-hash "$SCAN_SHA" \
+            --no-set-as-alerts-page \
+            --report \
+            --report-level warn \
+            --json .
