@@ -71,3 +71,10 @@ jobs:
             --report \
             --report-level warn \
             --json .
+
+      - name: Inspect original POC scan and policy
+        if: ${{ always() }}
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          SOCKET_SCAN_ID: b2d0b62d-eb99-4dc2-9f4b-0381e35a2997
+        run: python3 .github/scripts/socket-report-diagnostics.py
