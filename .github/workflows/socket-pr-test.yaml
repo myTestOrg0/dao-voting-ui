@@ -19,6 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
+      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
+      SOCKET_RESULTS_DIR: ${{ runner.temp }}/socket-results
       SCAN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
 
@@ -40,51 +43,52 @@ jobs:
           npm install --global socket@1.13.1
           socket --version
 
-      - name: Prepare dependency snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-          snapshot="$RUNNER_TEMP/socket-snapshot"
-          mkdir -p "$snapshot"
-          git show "${SCAN_SHA}:package.json" > "$snapshot/package.json"
-          git show "${SCAN_SHA}:yarn.lock" > "$snapshot/yarn.lock"
-          test -s "$snapshot/package.json"
-          test -s "$snapshot/yarn.lock"
-
       - name: Run Socket scan
         shell: bash
-        working-directory: ${{ runner.temp }}/socket-snapshot
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: |
           set -euo pipefail
+          mkdir -p "$SOCKET_RESULTS_DIR"
           if [ -z "$SOCKET_SECURITY_API_KEY" ]; then
             echo '::error::SOCKET_SECURITY_API_KEY is unavailable.'
             exit 1
           fi
+          # Scan the checkout; Socket discovers supported manifests and lockfiles.
+          # Preserve the CLI exit code so Block/API failures still fail this step.
+          set +e
           socket scan create \
-            --org lido-labs \
-            --repo dao-voting-ui \
+            --org "$SOCKET_ORG" \
+            --repo "$SOCKET_REPO" \
             --branch "$SCAN_BRANCH" \
             --commit-hash "$SCAN_SHA" \
             --no-set-as-alerts-page \
             --report \
             --report-level warn \
-            --json .
+            --json . > "$SOCKET_RESULTS_DIR/cli-output.log" 2> "$SOCKET_RESULTS_DIR/cli-error.log"
+          scan_status=$?
+          set -e
+          echo "Socket CLI exit status: $scan_status"
+          if [ "$scan_status" -ne 0 ]; then
+            echo '::error::Socket scan failed or policy blocked the snapshot. See Actions Summary.'
+          fi
+          exit "$scan_status"
 
-  report-diagnostics:
-    name: Inspect original POC scan and policy
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout diagnostics
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Read original scan and policy
+      - name: Write Actions Summary
+        if: ${{ always() }}
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-          SOCKET_SCAN_ID: b2d0b62d-eb99-4dc2-9f4b-0381e35a2997
-        run: python3 .github/scripts/socket-report-diagnostics.py
+        run: python3 .github/scripts/socket-summary.py
+
+      - name: Upload Socket report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: socket-report
+          path: |
+            ${{ env.SOCKET_RESULTS_DIR }}/summary.md
+            ${{ env.SOCKET_RESULTS_DIR }}/report.json
+            ${{ env.SOCKET_RESULTS_DIR }}/findings.json
+            ${{ env.SOCKET_RESULTS_DIR }}/scan-artifacts.json
+          if-no-files-found: warn
+          retention-days: 7
