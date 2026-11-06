@@ -1,4 +1,4 @@
-"""Render the current Socket scan as a read-only GitHub Actions job summary."""
+"""Evaluate server-resolved Socket actions and render a read-only Actions summary."""
 
 import base64
 import html
@@ -92,12 +92,21 @@ def collect_findings(artifacts):
                 "severity": severity, "action": action,
                 "fixed_version": props.get("firstPatchedVersionIdentifier") or "No data",
                 "ghsa": props.get("ghsaId") or "",
+                "action_source": alert.get("actionSource"),
+                "reachability": alert.get("reachability"),
             }
             previous = findings.get(key)
             if previous is None or (ACTION_RANK.get(action, 4), SEVERITY_RANK.get(severity, 4)) < (ACTION_RANK.get(previous["action"], 4), SEVERITY_RANK.get(previous["severity"], 4)):
                 findings[key] = finding
     rows = sorted(findings.values(), key=lambda f: (ACTION_RANK.get(f["action"], 4), SEVERITY_RANK.get(f["severity"], 4), f["package"], f["version"], f["id"]))
     return rows, sorted(manifests), len(components)
+
+
+def server_exit_code(rows):
+    """Unknown actions fail verification; only resolved Block findings fail policy."""
+    if any(f["action"] == "unknown" for f in rows):
+        return 2
+    return 1 if any(f["action"] == "error" for f in rows) else 0
 
 
 def advisory_label(finding):
@@ -120,11 +129,13 @@ def render_summary(result, rows, manifests, component_count, org, sha, report_ur
     counts = Counter(f["action"] for f in rows)
     cves = Counter(f["severity"] for f in rows if f["vulnerability"])
     visible = [f for f in rows if f["action"] in ("error", "warn", "unknown")]
-    verdict = "Policy passed" if data.get("healthy") is True else "Policy failed"
-    lines = ["## Socket dependency scan", "", f"**{verdict}** · full PR snapshot · Socket CLI 1.13.1", "", f"Organization: {md(org)} · commit: `{sha}` · scan: `{data['scanId']}`", ""]
+    code = server_exit_code(rows)
+    verdict = {0: "Server policy passed", 1: "Server policy failed", 2: "Server policy verification incomplete"}[code]
+    scan_id = data.get("id") or data.get("scanId")
+    lines = ["## Socket dependency scan", "", f"**{verdict}** · full PR snapshot · Socket CLI 1.13.1", "", f"Organization: {md(org)} · commit: `{sha}` · scan: `{scan_id}`", ""]
     if report_url:
         lines += [f"[Open Socket report]({report_url})", ""]
-    lines += ["| Components | Block | Warn | Monitor | Ignore | Unknown action |", "|---:|---:|---:|---:|---:|---:|", f"| {component_count} | {counts['error']} | {counts['warn']} | {counts['monitor']} | {counts['ignore']} | {counts['unknown']} |", "", "Counts are deduplicated by component/version and advisory (or non-CVE alert type).", "", f"**Vulnerability findings:** Critical {cves['critical']} · High {cves['high']} · Medium {cves['medium']} · Low {cves['low']} · Unknown {cves['unknown']}.", "", "Monitor/Ignore findings are retained in the JSON artifact. Passing policy does not mean there are no vulnerabilities.", "", "### Findings needing attention", ""]
+    lines += ["| Components | Block | Warn | Monitor | Ignore | Unknown action |", "|---:|---:|---:|---:|---:|---:|", f"| {component_count} | {counts['error']} | {counts['warn']} | {counts['monitor']} | {counts['ignore']} | {counts['unknown']} |", "", "Actions and the final verdict use server-resolved alert.action, including server reachability decisions. Counts are deduplicated by component/version and advisory (or non-CVE alert type).", "", f"**Vulnerability findings:** Critical {cves['critical']} · High {cves['high']} · Medium {cves['medium']} · Low {cves['low']} · Unknown {cves['unknown']}.", "", "Monitor/Ignore findings are retained in the JSON artifact. Passing policy does not mean there are no vulnerabilities.", "", "### Findings needing attention", ""]
     if visible:
         lines += [table(visible[:20]), ""]
         if len(visible) > 20:
@@ -154,17 +165,25 @@ def main():
     folder.mkdir(parents=True, exist_ok=True)
     try:
         output = (folder / "cli-output.log").read_text() if (folder / "cli-output.log").exists() else ""
+        if (folder / "cli-exit-code").read_text().strip() != "0":
+            raise ValueError("Socket scan creation failed; no policy pass can be established")
         result = parse_cli_result(output)
         data = result.get("data") or {}
-        if not result["ok"] or not data.get("scanId") or not isinstance(data.get("healthy"), bool):
+        if not result["ok"] or not data.get("id"):
             raise ValueError("Scan/report did not complete; inspect the scan step logs")
-        scan_id = data["scanId"]
+        scan_id = data["id"]
         if not re.fullmatch(r"[a-zA-Z0-9-]+", scan_id):
             raise ValueError("Invalid scan ID in CLI output")
         org = os.environ["SOCKET_ORG"]
         raw = get_api(org, f"full-scans/{scan_id}?include_license_details=true")
         artifacts = [json.loads(line) for line in raw.splitlines() if line.strip()]
         rows, manifests, component_count = collect_findings(artifacts)
+        # Do not let deduplication hide an unknown action behind a known one.
+        unknown_actions = any(
+            alert.get("action") not in ("error", "block", "warn", "monitor", "ignore")
+            for artifact in artifacts if isinstance(artifact, dict)
+            for alert in (artifact.get("alerts") or [])
+        )
         if not component_count:
             raise ValueError("No named components in scan response; coverage is unverified")
         report_url = ""
@@ -178,12 +197,22 @@ def main():
             pass  # Optional navigation metadata must not hide the findings.
         match = re.search(r"Found (\d+) files? to include in scan", output)
         content = render_summary(result, rows, manifests, component_count, org, os.environ["SCAN_SHA"], report_url, int(match[1]) if match else None)
-        (folder / "report.json").write_text(json.dumps(result, indent=2))
+        code = 2 if unknown_actions else server_exit_code(rows)
+        if unknown_actions:
+            content = content.replace("**Server policy passed**", "**Server policy verification incomplete**").replace("**Server policy failed**", "**Server policy verification incomplete**")
+            content += "\n**Verification incomplete:** the raw scan contains an unrecognized policy action.\n"
+        decision = {"source": "server alert.action", "scanId": scan_id,
+                    "healthy": code == 0, "verification_complete": code != 2,
+                    "exit_code": code, "actions": dict(Counter(f["action"] for f in rows)),
+                    "creation": result}
+        (folder / "report.json").write_text(json.dumps(decision, indent=2))
         (folder / "findings.json").write_text(json.dumps(rows, indent=2))
         (folder / "scan-artifacts.json").write_text(json.dumps(artifacts))
         write_summary(folder, content)
         print(f"Socket summary: {component_count} components, {len(rows)} grouped findings; scan {scan_id}")
-        return 0
+        if code:
+            print("::error::Socket server policy blocked the snapshot or verification is incomplete; see Actions Summary")
+        return code
     except (ValueError, OSError, KeyError, TypeError) as error:
         # Never print raw API bodies, credentials, or the captured CLI output.
         message = str(error)

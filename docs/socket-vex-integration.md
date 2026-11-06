@@ -17,7 +17,8 @@ GitHub token имеет только `contents: read`. Summary записыва�
 Артефакт `socket-report` хранится 7 дней и содержит Markdown, CLI report, сгруппированные
 находки и исходные записи скана. Token и захваченные CLI-логи в артефакт не включаются.
 
-Warn не блокирует, Block блокирует согласно native CLI report. Ошибки API или
+CLI только создаёт скан (без `--report`). Следующий шаг читает серверные `alert.action`:
+`error`/Block → exit 1; Warn/Monitor/Ignore → exit 0; неизвестное действие → exit 2. Ошибки API или
 невозможность получить отчёт завершают проверку ошибкой, а не успешным «0 findings».
 Summary строится по текущему scan ID и показывает package/version, CVE/GHSA, severity,
 действие и первую исправленную версию, если она известна. Счётчики дедуплицируются по
@@ -25,10 +26,11 @@ Summary строится по текущему scan ID и показывает p
 Monitor/Ignore сохраняются в JSON. Для forks GitHub обычно не выдаёт repository secret:
 такой запуск не сможет сканировать и не должен считаться чистым.
 
-Ограничение CLI: в исходнике `socket@1.13.1` `generate-report.mts` native verdict
-вычисляется по `securityPolicyRules[alertType].action`. Summary отдельно показывает
-серверный `alert.action`. До включения сложных policy rules/resolutions/VEX нужно
-проверить их согласованность; совпадение с verdict dashboard не предполагается.
+Native report CLI 1.13.1 повторно вычисляет действие по типу алерта, поэтому он
+больше не участвует в gating. И Summary, и итоговый статус используют серверные
+действия одного скана. Например, сервер вернул Monitor из precomputed reachability
+для critical advisory у elliptic 6.5.4, хотя native CLI report давал Warn.
+`report.json` теперь содержит серверный verdict и исходный результат создания скана.
 
 Документация: [Socket scan](https://docs.socket.dev/docs/socket-scan),
 [GitHub job summary](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#adding-a-job-summary).
@@ -115,11 +117,11 @@ Socket [alert resolutions](https://docs.socket.dev/docs/alert-resolutions) — �
 
 ## Предлагаемое рабочее решение для Socket
 
-Сделать отдельный CI adapter после получения исходного Socket scan. На первом этапе
+Следующий этап — отдельный CI adapter после получения исходного Socket scan. На первом этапе
 он только добавляет колонки VEX status/source/reason в Summary, не меняя gating.
 Следующим этапом, после проверки fixtures, он может рассчитывать effective verdict.
-Если VEX разрешает исключения, native CLI exit code нельзя просто оставить финальным
-вердиктом: сбор scan, ошибки инфраструктуры и решение effective policy надо разделить.
+Создание scan, ошибки инфраструктуры и решение effective policy уже разделены.
+Для применения VEX нужно расширить текущую server-action evaluation до effective policy.
 Ошибки скана не должны превращаться в non-blocking policy findings.
 
 Правила adapter:
@@ -146,8 +148,8 @@ Socket [alert resolutions](https://docs.socket.dev/docs/alert-resolutions) — �
 Для синхронизации dashboard нужен отдельный контролируемый процесс, который создаёт
 узкие Socket resolutions (repo + ecosystem + package + version + CVE) и отзывает их
 при удалении/смене VEX. Ему нужны отдельные write scopes Socket API, но GitHub App
-не требуется. В PR scanner эти write scopes добавлять не нужно. Нативное влияние
-resolutions на CLI 1.13.1 нужно подтвердить тестом перед таким вариантом.
+не требуется. В PR scanner эти write scopes добавлять не нужно. Влияние resolutions на серверные actions конкретного scan нужно подтвердить
+контрактным тестом; native CLI report в этой схеме не используется.
 
 ## Проверки для следующего этапа POC
 
@@ -159,3 +161,107 @@ resolutions на CLI 1.13.1 нужно подтвердить тестом пе�
 6. Отзыв исключения → finding возвращается; raw scan всегда доступен.
 7. В release повторить scan текущего артефакта и VEX evaluation; проверить warning/block
    на одной и той же fixture, затем убедиться, что публикация зависит от effective verdict.
+
+
+## Reachability и граница передачи данных
+
+Текущий PR workflow запускается без `--reach`: передаются автоматически обнаруженные
+поддерживаемые manifests/lockfiles (в проверенном скане package.json и yarn.lock).
+Precomputed reachability анализирует известный публичный код зависимостей и пути
+между пакетами; исходники Voting для этого не нужны. По документации Socket,
+этот режим не определяет применимость CVE в прямой зависимости, предполагает отсутствие
+phantom dependencies и может быть неполным при приватных пакетах.
+[Precomputed reachability](https://docs.socket.dev/docs/precomputed-reachability).
+
+Full application reachability (`--reach`) дополнительно анализирует код приложения
+и зависимостей. CLI может запускать анализ на нашем runner; Socket предлагает также
+managed scans на своей инфраструктуре. Для local mode исходный код можно оставить
+на своей инфраструктуре, а результаты анализа/SBOM metadata отправлять Socket.
+В metadata могут присутствовать имена файлов и сведения о вызовах: состав `.socket.facts.json`
+нужно проверить перед включением. По текущей документации нужен Enterprise/trial,
+Node 22+ и language toolchain. В POC full application mode не включён.
+[Full application reachability](https://docs.socket.dev/docs/full-application-reachability).
+
+## Центральное управление исключениями организации
+
+VEX — формат обмена применимостью CVE, а не полная система управления исключениями.
+Accepted risk не означает `not_affected`; исключение для лицензии, malware/typosquatting,
+IaC или secret finding вообще не описывается обычным vulnerability VEX.
+Обещать native поддержку одного файла всеми инструментами нельзя.
+
+Рекомендуемая архитектура POC: защищённый central security-decisions Git repository
+как source of truth + versioned evaluator в переиспользуемом CI workflow.
+OpenVEX — один из входных и выходных форматов этого решения.
+Это проект следующего этапа, новый registry/evaluator пока не реализован.
+
+Собственная запись содержит: стабильный ID, scope (repo/product/component/version,
+при необходимости image digest/distro/arch), CVE/GHSA или tool rule ID, тип решения,
+обоснование и evidence, owner/approver, дату действия и обязательный срок пересмотра.
+Разделяем технический статус (affected/not_affected/fixed/under_investigation)
+и временное разрешение принять риск, которое может существовать при affected.
+
+Последовательность gate:
+
+1. Зафиксировать commit артефакта, digest image и версию центральной политики/исключений.
+2. Собрать исходные findings Socket, Trivy и остальных scanner-ов. Ошибки scanners
+   и неполное покрытие отделить от обнаруженных уязвимостей.
+3. Нормализовать package identity/CVE aliases; применить доверенные VEX feeds в
+   порядке own → Docker → Aqua и отдельно действующие risk acceptances.
+4. Сохранить raw findings, effective findings и каждое применённое решение с provenance.
+5. Вычислить release policy: например, active Block → fail, Warn → success с отчётом.
+   Просроченное/неподходящее исключение не подавляет finding. Ошибка проверки → fail.
+6. Публиковать/promote release только после success. Не использовать findings count
+   в dashboard в качестве неявного release gate.
+
+Промежуточный exit code scanner-а по findings не должен преждевременно останавливать
+этот процесс. Например, Trivy может собирать JSON с findings exit code 0, сохраняя
+отдельную обработку ошибок исполнения; Socket scan create работает без native report.
+Нельзя blanket `continue-on-error` превратить падение scanner-а в разрешение релиза.
+
+Варианты центрального хранения:
+
+| Вариант | Сильная сторона | Ограничение |
+|---|---|---|
+| Git registry + OpenVEX + adapters | Review, история, воспроизводимость; подходит для POC | Schema/evaluator/adapters надо поддерживать самим |
+| Dependency-Track | SBOM inventory и triage уязвимостей, CycloneDX VEX | Не универсальное управление всеми типами findings; CI/native sync всё равно нужен |
+| DefectDojo | Агрегация findings и risk acceptance с expiry/API | Приём отчёта не означает автоматический контроль exit code исходного scanner-а |
+| Исключения отдельно в каждом scanner | Нативный dashboard/вывод | Несколько источников истины, рассинхронизация и сложный отзыв |
+
+Источники: [Dependency-Track suppression](https://docs.dependencytrack.org/triage/suppression/),
+[DefectDojo risk acceptance](https://docs.defectdojo.com/triage_findings/findings_workflows/os__risk_acceptance/).
+
+Если требуется единый результат также ВНУТРИ каждого dashboard, registry должен
+синхронизироваться с native механизмами инструментов. Для Socket это отдельный
+sync service с узкими resolutions и возможностью отзыва; для несовместимых VEX
+потребителей нужны exports/adapters. Без sync центральный gate корректен, но native
+UI scanner-а может продолжать показывать исходную находку. Это ожидаемо и должно
+быть явно обозначено разработчикам.
+
+## SBOM и сборка релиза
+
+Для npm manifest/lockfile SCA и инвентаря разрешённых зависимостей не требуется
+`yarn build`. Но это не точный перечень ПО в конечном Docker image: в нём есть
+OS packages, Node runtime, platform-specific/optional зависимости, файлы install scripts
+и результат bundling. Точный runtime inventory строится по фактическому image.
+
+Рекомендуется использовать уже существующую Docker build, без повторной сборки:
+
+- Включить BuildKit SBOM (`sbom: true` у build-push-action / `--sbom=true` у buildx)
+  и provenance, сохранить SPDX attestation с image digest.
+- Сканировать готовый image по immutable digest, по каждой поставляемой architecture,
+  например Trivy. Сохранить runtime SBOM и raw vulnerability report.
+- Сохранить отдельный source/build dependency SBOM для dev/build dependencies.
+  Не смешивать их с runtime без отметки контекста.
+- Сверить SBOM coverage: OS packages, npm packages, base image, версии/PURL и target
+  platform. SBOM не гарантирует обнаружение каждого встроенного/сгенерированного компонента.
+- Если registry push нужен для attestations/scan, сначала публиковать candidate в
+  staging/quarantine scope, а production tag/release/deploy делать после gate.
+  Должен продвигаться тот же digest, который проверен, без повторной сборки.
+
+В текущем Dockerfile Voting выполняется yarn install, затем в final stage копируется
+весь `/app`: туда попадает node_modules, включая установленные dev dependencies.
+Поэтому runtime image scan важен; наличие двух stages само по себе не означает
+удаление build dependencies. Dockerfile в рамках этого изменения не исправляется.
+
+[Docker SBOM attestations](https://docs.docker.com/build/metadata/attestations/sbom/),
+[Docker build attestations](https://docs.docker.com/build/metadata/attestations/).

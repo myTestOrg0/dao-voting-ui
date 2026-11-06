@@ -57,7 +57,7 @@ jobs:
             exit 1
           fi
           # Scan the checkout; Socket discovers supported manifests and lockfiles.
-          # Preserve the CLI exit code so Block/API failures still fail this step.
+          # Create only: the following step evaluates server-resolved actions.
           set +e
           socket scan create \
             --org "$SOCKET_ORG" \
@@ -65,18 +65,17 @@ jobs:
             --branch "$SCAN_BRANCH" \
             --commit-hash "$SCAN_SHA" \
             --no-set-as-alerts-page \
-            --report \
-            --report-level warn \
             --json . > "$SOCKET_RESULTS_DIR/cli-output.log" 2> "$SOCKET_RESULTS_DIR/cli-error.log"
           scan_status=$?
           set -e
-          echo "Socket CLI exit status: $scan_status"
+          printf '%s\n' "$scan_status" > "$SOCKET_RESULTS_DIR/cli-exit-code"
+          echo "Socket scan creation exit status: $scan_status"
           if [ "$scan_status" -ne 0 ]; then
-            echo '::error::Socket scan failed or policy blocked the snapshot. See Actions Summary.'
+            echo '::error::Socket scan creation failed. See Actions Summary.'
           fi
           exit "$scan_status"
 
-      - name: Write Actions Summary
+      - name: Evaluate server actions and write Summary
         if: ${{ always() }}
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
