@@ -19,10 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
+      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
       SCAN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
 
     steps:
+      - name: Set report directory
+        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-results" >> "$GITHUB_ENV"
+
       - name: Checkout candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -40,34 +45,51 @@ jobs:
           npm install --global socket@1.13.1
           socket --version
 
-      - name: Prepare dependency snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-          snapshot="$RUNNER_TEMP/socket-snapshot"
-          mkdir -p "$snapshot"
-          git show "${SCAN_SHA}:package.json" > "$snapshot/package.json"
-          git show "${SCAN_SHA}:yarn.lock" > "$snapshot/yarn.lock"
-          test -s "$snapshot/package.json"
-          test -s "$snapshot/yarn.lock"
-
       - name: Run Socket scan
         shell: bash
-        working-directory: ${{ runner.temp }}/socket-snapshot
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: |
           set -euo pipefail
+          mkdir -p "$SOCKET_RESULTS_DIR"
           if [ -z "$SOCKET_SECURITY_API_KEY" ]; then
             echo '::error::SOCKET_SECURITY_API_KEY is unavailable.'
             exit 1
           fi
+          # Scan the checkout; Socket discovers supported manifests and lockfiles.
+          # Create only: the following step evaluates server-resolved actions.
+          set +e
           socket scan create \
-            --org lido-labs \
-            --repo dao-voting-ui \
+            --org "$SOCKET_ORG" \
+            --repo "$SOCKET_REPO" \
             --branch "$SCAN_BRANCH" \
             --commit-hash "$SCAN_SHA" \
             --no-set-as-alerts-page \
-            --report \
-            --report-level warn \
-            --json .
+            --json . > "$SOCKET_RESULTS_DIR/cli-output.log" 2> "$SOCKET_RESULTS_DIR/cli-error.log"
+          scan_status=$?
+          set -e
+          printf '%s\n' "$scan_status" > "$SOCKET_RESULTS_DIR/cli-exit-code"
+          echo "Socket scan creation exit status: $scan_status"
+          if [ "$scan_status" -ne 0 ]; then
+            echo '::error::Socket scan creation failed. See Actions Summary.'
+          fi
+          exit "$scan_status"
+
+      - name: Evaluate server actions and write Summary
+        if: ${{ always() }}
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: python3 .github/scripts/socket-summary.py
+
+      - name: Upload Socket report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: socket-report
+          path: |
+            ${{ env.SOCKET_RESULTS_DIR }}/summary.md
+            ${{ env.SOCKET_RESULTS_DIR }}/report.json
+            ${{ env.SOCKET_RESULTS_DIR }}/findings.json
+            ${{ env.SOCKET_RESULTS_DIR }}/scan-artifacts.json
+          if-no-files-found: warn
+          retention-days: 7
