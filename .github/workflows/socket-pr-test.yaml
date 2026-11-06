@@ -21,11 +21,13 @@ jobs:
     env:
       SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
       SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
-      SOCKET_RESULTS_DIR: ${{ runner.temp }}/socket-results
       SCAN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
 
     steps:
+      - name: Set report directory
+        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-results" >> "$GITHUB_ENV"
+
       - name: Checkout candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
