@@ -6,9 +6,6 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from urllib.error import HTTPError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 spec = importlib.util.spec_from_file_location('vex', __file__.replace('socket-vex-fetch.py', 'socket-vex-evaluate.py'))
 vex = importlib.util.module_from_spec(spec)
@@ -18,46 +15,75 @@ ORDER = ['own', 'docker-dhi', 'aqua']
 
 
 class GitHubStore:
+    """Read public Git snapshots without cross-organization API token permissions."""
     def __init__(self):
-        self.cache = {}
+        import tempfile
+        self.temp = tempfile.TemporaryDirectory(prefix='socket-vex-snapshots-')
+        self.snapshots = {}
 
-    def get(self, url, optional=False):
-        if url in self.cache:
-            return self.cache[url]
-        headers = {'User-Agent': 'Socket-POC-VEX'}
-        token = os.environ.get('GITHUB_TOKEN')
-        if token and url.startswith('https://api.github.com/'):
-            headers['Authorization'] = 'Bearer ' + token
+    def git(self, folder, *args):
+        import subprocess
+        env = dict(os.environ, GIT_TERMINAL_PROMPT='0')
         try:
-            with urlopen(Request(url, headers=headers), timeout=45) as response:
-                value = response.read(10_000_001)
-                if len(value) > 10_000_000:
-                    raise ValueError('VEX response exceeds size limit')
-        except HTTPError as error:
-            if error.code == 404 and optional:
-                return None
-            raise ValueError(f'Verified VEX source request failed: HTTP {error.code}') from None
-        self.cache[url] = value
-        return value
-
-    def json_api(self, repo, path):
-        if repo not in ALLOWED:
-            raise ValueError('Untrusted VEX repository')
-        return json.loads(self.get('https://api.github.com/repos/' + repo + '/' + path))
+            result = subprocess.run(['git', '-c', 'credential.helper=', *args], cwd=folder,
+                                    capture_output=True, env=env, timeout=180)
+        except subprocess.TimeoutExpired:
+            raise ValueError('Public VEX snapshot read timed out') from None
+        if result.returncode:
+            raise ValueError('Unable to read public VEX Git snapshot: ' + args[0])
+        return result.stdout
 
     def resolve(self, repo, ref):
-        if not re.fullmatch(r'[A-Za-z0-9_./-]+', ref) or '..' in ref:
-            raise ValueError('Invalid VEX ref')
-        if re.fullmatch(r'[a-f0-9]{40}', ref):
-            return ref
-        return self.json_api(repo, 'commits/' + quote(ref, safe=''))['sha']
+        if repo not in ALLOWED or not re.fullmatch(r'[A-Za-z0-9_./-]+', ref) or '..' in ref or ref.startswith('-'):
+            raise ValueError('Untrusted repository or invalid VEX ref')
+        if repo in self.snapshots and self.snapshots[repo]['ref'] == ref:
+            return self.snapshots[repo]['revision']
+        from pathlib import Path
+        folder = Path(self.temp.name) / repo.replace('/', '--')
+        folder.mkdir(exist_ok=True)
+        if not (folder / 'HEAD').exists():
+            self.git(folder, 'init', '--bare', '--quiet')
+            self.git(folder, 'remote', 'add', 'origin', 'https://github.com/' + repo + '.git')
+            self.git(folder, 'config', 'remote.origin.promisor', 'true')
+            self.git(folder, 'config', 'remote.origin.partialclonefilter', 'blob:none')
+        self.git(folder, 'fetch', '--quiet', '--depth=1', '--filter=blob:none', 'origin', ref)
+        revision = self.git(folder, 'rev-parse', 'FETCH_HEAD').decode().strip()
+        if not re.fullmatch(r'[a-f0-9]{40}', revision):
+            raise ValueError('Invalid VEX commit identity')
+        self.snapshots[repo] = {'folder': folder, 'ref': ref, 'revision': revision}
+        return revision
 
     def file(self, repo, revision, path):
         if repo not in ALLOWED or not re.fullmatch(r'[a-f0-9]{40}', revision):
             raise ValueError('Untrusted VEX snapshot')
         if '..' in PurePosixPath(path).parts or path.startswith('/'):
             raise ValueError('Invalid VEX document path')
-        return self.get(f'https://raw.githubusercontent.com/{repo}/{revision}/' + quote(path, safe='/'))
+        if repo not in self.snapshots:
+            self.resolve(repo, revision)
+        raw = self.git(self.snapshots[repo]['folder'], 'show', revision + ':' + path)
+        if len(raw) > 10_000_000:
+            raise ValueError('VEX document exceeds size limit')
+        return raw
+
+    def json_api(self, repo, path):
+        # Internal compatibility shape; this uses git ls-tree, not the REST API.
+        if repo not in ALLOWED or repo not in self.snapshots:
+            raise ValueError('Untrusted or unresolved VEX repository')
+        folder = self.snapshots[repo]['folder']
+        if path.startswith('contents/pkg?ref='):
+            revision = path.split('=', 1)[1]
+            raw = self.git(folder, 'ls-tree', revision + ':pkg')
+            return [{'name': line.split('\t', 1)[1], 'type': 'dir' if line.startswith('040000') else 'file',
+                     'sha': line.split('\t', 1)[0].split()[2]} for line in raw.decode().splitlines()]
+        if path.startswith('git/trees/'):
+            tree = path[len('git/trees/'):].split('?', 1)[0]
+            if not re.fullmatch(r'[a-f0-9]{40}', tree):
+                raise ValueError('Invalid package tree identity')
+            raw = self.git(folder, 'ls-tree', '-r', tree)
+            entries = [{'path': line.split('\t', 1)[1], 'type': line.split()[1]}
+                       for line in raw.decode().splitlines()]
+            return {'truncated': False, 'tree': entries}
+        raise ValueError('Unsupported public snapshot lookup')
 
 
 def aggregate(name, repo, revision, documents):

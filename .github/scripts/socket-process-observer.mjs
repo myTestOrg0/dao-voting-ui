@@ -10,19 +10,27 @@ function emit(event) {
   if (!output) return;
   try { fs.appendFileSync(output, JSON.stringify({pid:process.pid,...event})+'\n'); } catch {}
 }
-const safeVerbs = new Set(['install','ci','build','run','typechain','--version','--frozen-lockfile','--non-interactive','exec','tsc','compile']);
+const safeVerbs = new Set(['install','ci','build','run','typechain','--version','--frozen-lockfile','--non-interactive','exec','tsc','compile','view','pack','root','list','ls','config','get']);
+const safeBinaries=new Set(['node','npm','yarn','corepack','pnpm','sparjs','bash','sh','env','which','tar','gzip','python3','ulimit','true']);
+const safeScripts=new Set(['cli.js','cli-wrapper.mjs','coana-cache.mjs','npm-cli.js','yarn.js']);
+let socketCliProcess=false;
+try { socketCliProcess=fs.realpathSync(process.argv[1]).includes('/node_modules/socket/'); } catch {}
 function command(command, args) {
-  const words = Array.isArray(args) ? args.filter(x=>typeof x==='string') : [];
-  emit({type:'subprocess',binary:path.basename(String(command)),operations:words.filter(x=>safeVerbs.has(x)).slice(0,8),
-        script:words.find(x=>/\.(?:m?js|cjs)$/.test(x)) ? path.basename(words.find(x=>/\.(?:m?js|cjs)$/.test(x))) : null});
+  const commandWords=String(command).trim().split(/\s+/);
+  const words=[...commandWords.slice(1),...(Array.isArray(args)?args.filter(x=>typeof x==='string'):[])];
+  const binary=path.basename(commandWords[0]);
+  const script=words.find(x=>/\.(?:m?js|cjs)$/.test(x));
+  emit({type:'subprocess',binary:safeBinaries.has(binary)?binary:'<other>',
+        operations:words.filter(x=>safeVerbs.has(x)).slice(0,8),
+        script:script?(safeScripts.has(path.basename(script))?path.basename(script):'<script>'):null});
 }
-for (const method of ['spawn','spawnSync','execFile','execFileSync']) {
+for (const method of ['spawn','spawnSync','execFile','execFileSync','exec','execSync']) {
   const original = cp[method];
   cp[method] = function(binary,args,...rest) { command(binary,args); return original.call(this,binary,args,...rest); };
 }
 const originalReadStream=fs.createReadStream;
 fs.createReadStream=function(file,...args) {
-  if (String(process.pid)===process.env.SOCKET_OBSERVER_ROOT_PID && typeof file==='string') {
+  if ((socketCliProcess || String(process.pid)===process.env.SOCKET_OBSERVER_ROOT_PID) && typeof file==='string') {
     let absolute=path.resolve(file);
     try { absolute=fs.realpathSync(absolute); } catch {}
     const name=path.basename(file);

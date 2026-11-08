@@ -90,7 +90,7 @@ class ObserverTests(unittest.TestCase):
     def test_trace_excludes_environment_and_full_command_arguments(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);(root/'package.json').write_text('{}');trace=root/'trace.jsonl'
-            script="const fs=require('fs'); const cp=require('child_process');fs.createReadStream('package.json').resume();cp.spawnSync('/usr/bin/true',['SECRET_ARGUMENT_123']);"
+            script="const fs=require('fs'); const cp=require('child_process');fs.createReadStream('package.json').resume();cp.spawnSync('/usr/bin/true',['SECRET_ARGUMENT_123']);cp.execSync('SECRET_SHELL_123=value /usr/bin/true');"
             env=dict(os.environ,GITHUB_WORKSPACE=directory,SOCKET_TRACE_FILE=str(trace),SECRET_TOKEN='SECRET_ENV_123')
             env.pop('SOCKET_OBSERVER_ROOT_PID',None)
             result=subprocess.run(['node','--import='+str(ROOT/'socket-process-observer.mjs'),'-e',script],cwd=directory,env=env,capture_output=True)
@@ -98,6 +98,7 @@ class ObserverTests(unittest.TestCase):
             text=trace.read_text()
             self.assertNotIn('SECRET_ARGUMENT_123',text)
             self.assertNotIn('SECRET_ENV_123',text)
+            self.assertNotIn('SECRET_SHELL_123',text)
             events=[json.loads(x) for x in text.splitlines()]
             self.assertTrue(any(x.get('path')=='package.json' and x['bytes']==2 for x in events))
 

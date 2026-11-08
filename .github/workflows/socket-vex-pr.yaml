@@ -50,8 +50,6 @@ jobs:
         run: python3 .github/scripts/socket-summary.py
       - name: Apply central VEX and emit final optional failed status
         if: ${{ always() }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/socket-vex-pipeline.py
       - name: Upload report even when findings fail the check
         if: ${{ always() }}
@@ -73,8 +71,6 @@ jobs:
       - name: Set evidence directory
         run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/central-priority-tests" >> "$GITHUB_ENV"
       - name: Test own Docker Aqua priority from central fixtures
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/test-central-vex.py
       - name: Upload priority test evidence
         if: ${{ always() }}
