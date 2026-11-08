@@ -201,3 +201,18 @@ Fixtures с названиями Docker/Aqua проверяют роли при�
 [PR scanning](https://docs.socket.dev/docs/socket-for-github-pull-request-scanning),
 [Full application reachability](https://docs.socket.dev/docs/full-application-reachability),
 [Reachability results](https://docs.socket.dev/docs/reachability-results).
+
+## Последняя сквозная проверка
+
+Очистка: commit `270f240`; в PR 12 файлов. Baseline
+[run 42512531182](https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42512531182)
+создал scan `bf3cb00a-e5d2-47a3-81e9-96c69e0a5dc3` из develop
+`79f467601f20f9e6cf300ffbc312c1fa6d493ee1`: 1433 компонента, 217 vulnerability findings
+(53 Warn, 164 Monitor). По severity: 5 Critical, 103 High, 89 Medium, 20 Low.
+Это находки package/version/advisory, не число уникальных CVE организации.
+Server policy exit = 0; дополнительный advisory verdict = 1.
+
+Публикация scan успешна; API-проверка dashboard head получила 403 из-за отсутствия доступа `repo:list`.
+Поэтому переключение страниц Alerts/Dependencies пока не подтверждено чтением metadata.
+Оба PR workflow завершили проверку: native run 42512522225, VEX run 42512522257;
+в VEX verification_complete=true и 217 нерешённых findings. PR остаётся MERGEABLE при красных checks.

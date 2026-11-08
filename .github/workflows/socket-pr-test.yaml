@@ -73,7 +73,15 @@ jobs:
           spec.loader.exec_module(summary)
           folder = Path(os.environ['SOCKET_RESULTS_DIR'])
           report = json.loads((folder / 'report.json').read_text())
-          repo = json.loads(summary.get_api(os.environ['SOCKET_ORG'], 'repos/' + quote(os.environ['SOCKET_REPO'], safe='')))
+          try:
+              repo = json.loads(summary.get_api(os.environ['SOCKET_ORG'], 'repos/' + quote(os.environ['SOCKET_REPO'], safe='')))
+          except ValueError as error:
+              info = {'verification_complete': False, 'expected_scan_id': report['scanId'], 'reason': str(error)}
+              (folder / 'baseline-head.json').write_text(json.dumps(info, indent=2))
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+                  output.write('\n### Dashboard head verification\n\nNot verified: ' + summary.md(error) + '. Reading repository metadata requires Socket `repo:list`; scan publication is a separate completed step.\n')
+              print(json.dumps(info, indent=2))
+              raise SystemExit(2)
           info = {key: repo.get(key) for key in ('id', 'name', 'default_branch', 'head_full_scan_id')}
           info['expected_scan_id'] = report['scanId']
           info['matches'] = info['head_full_scan_id'] == report['scanId'] and info['default_branch'] == 'develop'
