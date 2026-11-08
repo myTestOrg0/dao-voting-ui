@@ -5,6 +5,11 @@ name: Socket PR test
     branches: [develop]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      run_reachability:
+        description: Run the full application reachability POC as well
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,10 +45,7 @@ jobs:
           node-version: '24'
 
       - name: Install Socket CLI
-        working-directory: ${{ runner.temp }}
-        run: |
-          npm install --global socket@1.13.1
-          socket --version
+        run: bash .github/scripts/install-socket-cli.sh
 
       - name: Run Socket scan
         shell: bash
@@ -81,6 +83,12 @@ jobs:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: python3 .github/scripts/socket-summary.py
 
+      - name: Probe native exclusion API without changing resolutions
+        if: ${{ always() }}
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: python3 .github/scripts/socket-native-probe.py
+
       - name: Upload Socket report
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -91,5 +99,76 @@ jobs:
             ${{ env.SOCKET_RESULTS_DIR }}/report.json
             ${{ env.SOCKET_RESULTS_DIR }}/findings.json
             ${{ env.SOCKET_RESULTS_DIR }}/scan-artifacts.json
+            ${{ env.SOCKET_RESULTS_DIR }}/native-probe.json
           if-no-files-found: warn
           retention-days: 7
+
+  reachability-poc:
+    name: Socket full application reachability POC
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_reachability }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
+      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
+      SCAN_SHA: ${{ github.sha }}
+      SOCKET_SCAN_MODE: full-application-reachability
+    steps:
+      - name: Set report directory
+        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-reach-results" >> "$GITHUB_ENV"
+      - name: Checkout candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install pinned Socket CLI
+        run: bash .github/scripts/install-socket-cli.sh
+      - name: Run full application analysis on this runner
+        shell: bash
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$SOCKET_RESULTS_DIR"
+          set +e
+          socket scan create --reach --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
+            --branch "$GITHUB_REF_NAME" --commit-hash "$SCAN_SHA" \
+            --no-set-as-alerts-page --json . \
+            > "$SOCKET_RESULTS_DIR/cli-output.log" 2> "$SOCKET_RESULTS_DIR/cli-error.log"
+          scan_status=$?
+          set -e
+          printf '%s\n' "$scan_status" > "$SOCKET_RESULTS_DIR/cli-exit-code"
+          echo "Full application scan creation exit status: $scan_status"
+          exit "$scan_status"
+      - name: Evaluate server actions and write Summary
+        if: ${{ always() }}
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: python3 .github/scripts/socket-summary.py
+      - name: Upload reachability report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: socket-reach-report
+          path: |
+            ${{ env.SOCKET_RESULTS_DIR }}/summary.md
+            ${{ env.SOCKET_RESULTS_DIR }}/report.json
+            ${{ env.SOCKET_RESULTS_DIR }}/findings.json
+            ${{ env.SOCKET_RESULTS_DIR }}/scan-artifacts.json
+            ${{ env.SOCKET_RESULTS_DIR }}/failure.json
+          retention-days: 7
+
+  evaluator-tests:
+    name: Socket and VEX evaluator tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify CLI hash pin
+        run: bash .github/scripts/install-socket-cli.sh --verify-only
+      - name: Run tests
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts/tests -bv

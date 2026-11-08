@@ -132,7 +132,7 @@ def render_summary(result, rows, manifests, component_count, org, sha, report_ur
     code = server_exit_code(rows)
     verdict = {0: "Server policy passed", 1: "Server policy failed", 2: "Server policy verification incomplete"}[code]
     scan_id = data.get("id") or data.get("scanId")
-    lines = ["## Socket dependency scan", "", f"**{verdict}** · full PR snapshot · Socket CLI 1.13.1", "", f"Organization: {md(org)} · commit: `{sha}` · scan: `{scan_id}`", ""]
+    lines = ["## Socket dependency scan", "", f"**{verdict}** · {md(os.environ.get('SOCKET_SCAN_MODE', 'manifest snapshot'))} · Socket CLI 1.13.1", "", f"Organization: {md(org)} · commit: `{sha}` · scan: `{scan_id}`", ""]
     if report_url:
         lines += [f"[Open Socket report]({report_url})", ""]
     lines += ["| Components | Block | Warn | Monitor | Ignore | Unknown action |", "|---:|---:|---:|---:|---:|---:|", f"| {component_count} | {counts['error']} | {counts['warn']} | {counts['monitor']} | {counts['ignore']} | {counts['unknown']} |", "", "Actions and the final verdict use server-resolved alert.action, including server reachability decisions. Counts are deduplicated by component/version and advisory (or non-CVE alert type).", "", f"**Vulnerability findings:** Critical {cves['critical']} · High {cves['high']} · Medium {cves['medium']} · Low {cves['low']} · Unknown {cves['unknown']}.", "", "Monitor/Ignore findings are retained in the JSON artifact. Passing policy does not mean there are no vulnerabilities.", "", "### Findings needing attention", ""]
@@ -160,13 +160,34 @@ def write_summary(folder, content):
             stream.write(content)
 
 
+def print_findings(rows, component_count):
+    """Plain logs complement the Markdown summary; never print advisory bodies."""
+    counts = Counter(f["action"] for f in rows)
+    print(f"Server actions: components={component_count} Block={counts['error']} Warn={counts['warn']} Monitor={counts['monitor']} Ignore={counts['ignore']}")
+    print("Package | Version | CVE/GHSA or alert | Severity | Server action | Fix")
+    for finding in rows:
+        if finding["action"] not in ("error", "warn", "unknown"):
+            continue
+        values = [finding[key] for key in ("package", "version", "id", "severity", "action", "fixed_version")]
+        safe = [re.sub(r"[\x00-\x1f\x7f]", " ", str(value))[:400] for value in values]
+        print("FINDING | " + " | ".join(safe))
+
+
 def main():
     folder = Path(os.environ["SOCKET_RESULTS_DIR"])
     folder.mkdir(parents=True, exist_ok=True)
     try:
         output = (folder / "cli-output.log").read_text() if (folder / "cli-output.log").exists() else ""
         if (folder / "cli-exit-code").read_text().strip() != "0":
-            raise ValueError("Socket scan creation failed; no policy pass can be established")
+            detail = ""
+            try:
+                failed = parse_cli_result(output)
+                detail = ": " + str(failed.get("message") or "")
+                if failed.get("cause"):
+                    detail += " / " + str(failed["cause"])
+            except ValueError:
+                pass
+            raise ValueError("Socket scan creation failed; no policy pass can be established" + detail)
         result = parse_cli_result(output)
         data = result.get("data") or {}
         if not result["ok"] or not data.get("id"):
@@ -209,6 +230,7 @@ def main():
         (folder / "findings.json").write_text(json.dumps(rows, indent=2))
         (folder / "scan-artifacts.json").write_text(json.dumps(artifacts))
         write_summary(folder, content)
+        print_findings(rows, component_count)
         print(f"Socket summary: {component_count} components, {len(rows)} grouped findings; scan {scan_id}")
         if code:
             print("::error::Socket server policy blocked the snapshot or verification is incomplete; see Actions Summary")
@@ -219,7 +241,9 @@ def main():
         token = os.environ.get("SOCKET_SECURITY_API_KEY")
         if token:
             message = message.replace(token, "[redacted]")
+        (folder / "failure.json").write_text(json.dumps({"status": "verification_incomplete", "reason": message[:2000]}))
         write_summary(folder, "## Socket dependency scan\n\n**Report unavailable — verification incomplete.**\n\n" + md(message) + "\n\nInspect the scan step logs.\n")
+        print("Verification incomplete: " + re.sub(r"[\x00-\x1f\x7f]", " ", message)[:2000])
         print("::error::Socket summary could not be completed; inspect Actions Summary")
         return 1
 
