@@ -1,0 +1,120 @@
+{
+  "kind": "live_native_resolution_lifecycle",
+  "target": {
+    "name": "lodash",
+    "version": "4.17.11",
+    "cve": "CVE-2019-10744",
+    "type": "criticalCVE"
+  },
+  "repo": "dao-voting-ui",
+  "policy_modified": false,
+  "resolution_deleted": true,
+  "phases": [
+    {
+      "phase": "baseline",
+      "scan_id": "d42eb658-6b02-45d9-a5df-3c7089d3d667",
+      "components": 1433,
+      "target_action": "warn",
+      "target_action_source": {
+        "type": "org-policy",
+        "candidates": [
+          {
+            "type": "org-policy",
+            "action": "warn",
+            "actionPolicyIndex": 0,
+            "repoLabelId": ""
+          }
+        ]
+      },
+      "controls": {
+        "CVE-2020-8203": "warn",
+        "CVE-2021-23337": "warn"
+      },
+      "actions": {
+        "warn": 53,
+        "monitor": 1050,
+        "ignore": 383
+      },
+      "server_exit_code": 0
+    },
+    {
+      "phase": "resolution_active",
+      "scan_id": "3287925a-022a-4193-9314-f9e7a017c1f4",
+      "components": 1433,
+      "target_action": "ignore",
+      "target_action_source": {
+        "type": "resolution",
+        "candidates": [
+          {
+            "type": "resolution",
+            "action": "ignore",
+            "actionPolicyIndex": 0,
+            "repoLabelId": ""
+          },
+          {
+            "type": "org-policy",
+            "action": "warn",
+            "actionPolicyIndex": 0,
+            "repoLabelId": ""
+          }
+        ]
+      },
+      "controls": {
+        "CVE-2020-8203": "warn",
+        "CVE-2021-23337": "warn"
+      },
+      "actions": {
+        "warn": 52,
+        "monitor": 1050,
+        "ignore": 384
+      },
+      "server_exit_code": 0
+    },
+    {
+      "phase": "after_revoke",
+      "scan_id": "f7b18dd8-9120-44f7-b58e-6e934d9eb6e1",
+      "components": 1433,
+      "target_action": "warn",
+      "target_action_source": {
+        "type": "org-policy",
+        "candidates": [
+          {
+            "type": "org-policy",
+            "action": "warn",
+            "actionPolicyIndex": 0,
+            "repoLabelId": ""
+          }
+        ]
+      },
+      "controls": {
+        "CVE-2020-8203": "warn",
+        "CVE-2021-23337": "warn"
+      },
+      "actions": {
+        "warn": 53,
+        "monitor": 1050,
+        "ignore": 383
+      },
+      "server_exit_code": 0
+    }
+  ],
+  "status": "passed",
+  "resolution_uuid": "4f2cdaa5-0281-4ebe-ad05-981fda35203c",
+  "selector": {
+    "location.repo": "dao-voting-ui",
+    "artifact.type": "npm",
+    "artifact.namespace": "",
+    "artifact.name": "lodash",
+    "artifact.version": "4.17.11",
+    "finding.alertType": "criticalCVE",
+    "finding.cveId": "CVE-2019-10744"
+  },
+  "creation_and_read_verified": true,
+  "suppression_observed": true,
+  "restoration_observed": true,
+  "controls_unchanged": true,
+  "run_id": 42479243538,
+  "run_url": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42479243538",
+  "commit": "1741a37",
+  "unit_test_methods": 22
+}

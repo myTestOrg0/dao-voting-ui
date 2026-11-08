@@ -1,0 +1,45 @@
+{
+  "kind": "live_api_capability_probe",
+  "mutations_persisted": false,
+  "checks": [
+    {
+      "name": "list",
+      "method": "GET",
+      "dry_run": false,
+      "http_status": 200,
+      "status": "supported",
+      "response_fields": [
+        "endCursor",
+        "items"
+      ]
+    },
+    {
+      "name": "create_dry_run",
+      "method": "POST",
+      "dry_run": true,
+      "http_status": 200,
+      "status": "supported",
+      "response_fields": [
+        "uuid",
+        "reason",
+        "reason_text",
+        "comment",
+        "vigil_selector",
+        "alert_type",
+        "repo",
+        "repo_label",
+        "artifact_type",
+        "artifact_namespace",
+        "artifact_name",
+        "artifact_version",
+        "resolved_by",
+        "created_at",
+        "updated_at",
+        "dry_run"
+      ]
+    }
+  ],
+  "run_id": 42471633729,
+  "run_attempt": 2,
+  "run_url": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42471633729/attempts/2"
+}

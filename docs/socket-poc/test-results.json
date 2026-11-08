@@ -46,33 +46,33 @@
       "id": "N01",
       "kind": "live",
       "name": "Native resolution list",
-      "status": "blocked",
-      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470524152",
-      "actual": "HTTP 403"
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42471633729/attempts/2",
+      "actual": "HTTP 200 after scope update; earlier HTTP 403 retained in original evidence"
     },
     {
       "id": "N02",
       "kind": "live",
       "name": "Native create dry run",
-      "status": "blocked",
-      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470524152",
-      "actual": "HTTP 403, no resolution persisted"
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42471633729/attempts/2",
+      "actual": "HTTP 200; no resolution persisted by dry run"
     },
     {
       "id": "N03",
-      "kind": "pending",
+      "kind": "live",
       "name": "Native create apply rescan revoke",
-      "status": "not_run",
-      "evidence": "Requires separate resolution token and server snapshot validation",
-      "actual": "No end-to-end suppression claim"
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42479243538",
+      "actual": "Warn → Ignore → Warn; control CVEs unchanged; resolution deleted"
     },
     {
       "id": "UNIT01",
       "kind": "fixture",
       "name": "Unit and integration evaluator suite",
       "status": "passed",
-      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470519241",
-      "actual": "17 test methods passed in Actions"
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42479243538",
+      "actual": "22 test methods passed in Actions"
     },
     {
       "id": "V01",

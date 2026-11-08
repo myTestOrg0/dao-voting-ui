@@ -280,11 +280,27 @@ CLI устанавливается по tarball SHA-512, dependency lock SHA-256
 SRI через npm ci --ignore-scripts. Изменение lockfile отвергается до установки.
 
 Реальные запуски: PR run 42470524152 (manifest/log/hash/17 tests) и manual comparison
-42470519241 (manifest + full application reachability). В native resolution API
-GET и create dry-run вернули HTTP 403; создание/применение/отзыв не протестированы.
-Нужен отдельный `SOCKET_RESOLUTIONS_TEST_API_KEY` с соответствующими scopes.
-Тестовый secret предпочитается в API probe; scan token не получает write scopes.
+42470519241 (manifest + full application reachability). Первоначально native resolution API GET и create dry-run вернули HTTP 403.
+После добавления пользователем прав на существующий токен повторный запуск
+42471633729 attempt 2 вернул HTTP 200. Отдельный token не понадобился для POC;
+для production разделение scan и resolution management credentials рекомендуется.
+
+Реальный lifecycle run 42479243538 прошёл: lodash@4.17.11 / CVE-2019-10744
+Warn → Ignore (actionSource=resolution) → Warn после удаления resolution.
+Контрольные CVE-2020-8203 и CVE-2021-23337 сохранили Warn, покрытие — 1433 компонента.
+Временный resolution удалён; политика не изменялась. Во всех фазах exit code был 0,
+поскольку исходное действие Warn: native Block → Ignore ещё требует отдельного теста.
+Компактные доказательства — socket-poc/evidence/native-cycle.json. Число unit/integration
+тестовых методов выросло до 22, включая очистку при ошибках и защиту от удаления чужой записи.
 
 В VEX CLI replay проверены 10 сценариев на реальной находке с искусственным Block
 baseline; это не реальная оценка неприменимости и не production exclusion.
 Полный внешний feed sync и release image gate пока не реализованы.
+
+
+Native lifecycle можно повторить вручную:
+`gh workflow run socket-pr-test.yaml --ref socket-pr-analysis -f run_native_resolution_cycle=true`.
+Этот opt-in режим создаёт ровно одно временное исключение для точного repo/package/version/CVE,
+читает его, создаёт новый scan, удаляет resolution в finally и создаёт контрольный scan.
+Дополнительный always-run cleanup повторяет удаление только принадлежащей этому запуску записи.
+Обычные pull_request запуски по-прежнему выполняют только list и dry-run без сохранения исключений.
