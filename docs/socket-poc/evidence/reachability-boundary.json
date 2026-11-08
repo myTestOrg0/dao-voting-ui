@@ -1,0 +1,269 @@
+{
+  "engine_version": "15.14.1",
+  "explicit_production_build_step": false,
+  "optional_analytics_disabled": true,
+  "manifest_uploader_includes_checkout_archive": false,
+  "observation_limits": "Node-launched subprocesses and selected root CLI file streams; not a full network or OS process audit.",
+  "upload_candidates": [
+    {
+      "path": "package.json",
+      "bytes": 3196,
+      "role": "root CLI upload candidate"
+    },
+    {
+      "path": "yarn.lock",
+      "bytes": 526871,
+      "role": "root CLI upload candidate"
+    },
+    {
+      "path": ".socket.facts.json",
+      "bytes": 6534393,
+      "role": "raw facts read for compression"
+    },
+    {
+      "path": ".socket.facts.json.br",
+      "bytes": 96346,
+      "role": "root CLI upload candidate"
+    }
+  ],
+  "subprocesses": [
+    {
+      "pid": 2500,
+      "type": "subprocess",
+      "binary": "node",
+      "operations": [],
+      "script": "cli.js"
+    },
+    {
+      "pid": 2508,
+      "type": "subprocess",
+      "binary": "node",
+      "operations": [],
+      "script": "coana-cache.mjs"
+    },
+    {
+      "pid": 2508,
+      "type": "subprocess",
+      "binary": "node",
+      "operations": [
+        "install"
+      ],
+      "script": "coana-cache.mjs"
+    },
+    {
+      "pid": 2508,
+      "type": "subprocess",
+      "binary": "node",
+      "operations": [
+        "run"
+      ],
+      "script": "cli-wrapper.mjs"
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "ulimit",
+      "operations": [],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "ulimit",
+      "operations": [],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "ulimit",
+      "operations": [],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "ulimit",
+      "operations": [],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "ulimit",
+      "operations": [],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "ulimit",
+      "operations": [],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "which",
+      "operations": [],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "npm",
+      "operations": [
+        "pack"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "sparjs",
+      "operations": [
+        "typechain"
+      ],
+      "script": null
+    },
+    {
+      "pid": 2542,
+      "type": "subprocess",
+      "binary": "sparjs",
+      "operations": [
+        "typechain"
+      ],
+      "script": null
+    }
+  ],
+  "facts": {
+    "bytes": 6534393,
+    "sha256": "9e84bacf315feed20d2884b3d0a0fec9825e82441b9a022096d82b3004717371",
+    "top_level_keys": [
+      "components",
+      "workspaceDiagnostics"
+    ],
+    "filename_fields": 3727,
+    "potential_content_field_bytes": {},
+    "field_names": [
+      "activation_status",
+      "affectedPurls",
+      "analysisLevel",
+      "column",
+      "components",
+      "confidence",
+      "dead",
+      "dependencies",
+      "dev",
+      "diagnostics",
+      "direct",
+      "end",
+      "file",
+      "filename",
+      "files",
+      "ghsaId",
+      "ghsa_id",
+      "id",
+      "line",
+      "manifestFiles",
+      "matches",
+      "message",
+      "name",
+      "namespace",
+      "package",
+      "preinstalledDependencies",
+      "purl",
+      "purl_type",
+      "range",
+      "reachability",
+      "severity",
+      "sourceFilesDetected",
+      "sourceLocation",
+      "start",
+      "subprojectPath",
+      "toplevelAncestors",
+      "truncated",
+      "type",
+      "version",
+      "vulnerabilities",
+      "warnings",
+      "workspaceDiagnostics",
+      "workspacePath"
+    ]
+  },
+  "run_id": 42488906212,
+  "run_url": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42488906212",
+  "commit": "7ed508a"
+}

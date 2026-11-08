@@ -1,6 +1,6 @@
 {
   "as_of": "2026-11-08",
-  "tested_commit": "2f9cd457e4076cfb3aaedfc267f6b61b9d226f2e",
+  "tested_commit": "6fa69519b430f9ed578fec0b6f92b32c8044a70e",
   "cases": [
     {
       "id": "PR01",
@@ -71,8 +71,8 @@
       "kind": "fixture",
       "name": "Unit and integration evaluator suite",
       "status": "passed",
-      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42479243538",
-      "actual": "22 test methods passed in Actions"
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42490737383",
+      "actual": "33 test methods passed in Actions"
     },
     {
       "id": "V01",
@@ -157,7 +157,7 @@
     {
       "id": "V11",
       "kind": "pending",
-      "name": "Production organizational OpenVEX decision",
+      "name": "Approved production not_affected decision",
       "status": "not_run",
       "evidence": "Requires an approved applicability assessment",
       "actual": "Synthetic VEX was not enabled in normal PR gate"
@@ -176,7 +176,103 @@
       "name": "Three-source priority",
       "status": "partial",
       "evidence": "V03 V04 V08 V10",
-      "actual": "Priority tested with synthetic sources; real own Debian document gives no npm match. Live Docker/Aqua matching not proven."
+      "actual": "Live snapshots loaded; priority fixtures pass. Docker image-bound statements cannot exclude this manifest-only product; positive vendor applicability is not claimed."
+    },
+    {
+      "id": "AD01",
+      "kind": "live",
+      "name": "Native findings fail optional check",
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42490737383",
+      "actual": "verification complete, exit 1 for unresolved vulnerabilities"
+    },
+    {
+      "id": "AD02",
+      "kind": "live",
+      "name": "VEX findings fail optional check",
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42490737368",
+      "actual": "verification complete, exit 1; all three source snapshots recorded"
+    },
+    {
+      "id": "AD03",
+      "kind": "live_configuration",
+      "name": "Failed checks do not require merge success",
+      "status": "passed",
+      "evidence": "evidence/advisory-integrations.json",
+      "actual": "No branch protection/applicable rulesets; MERGEABLE / UNSTABLE. No merge was performed."
+    },
+    {
+      "id": "DATA01",
+      "kind": "live_observation",
+      "name": "Reachability upload streams and facts inventory",
+      "status": "passed",
+      "evidence": "evidence/reachability-boundary.json",
+      "actual": "3196 + 526871 + 96346 bytes; derived facts metadata observed, not a full network audit"
+    },
+    {
+      "id": "P01",
+      "kind": "central_synthetic_fixture",
+      "name": "Own affected wins",
+      "status": "passed",
+      "evidence": "evidence/central-priority-tests.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "P02",
+      "kind": "central_synthetic_fixture",
+      "name": "Own not_affected wins",
+      "status": "passed",
+      "evidence": "evidence/central-priority-tests.json",
+      "actual": "expected exit 0, actual 0"
+    },
+    {
+      "id": "P03",
+      "kind": "central_synthetic_fixture",
+      "name": "Docker fallback",
+      "status": "passed",
+      "evidence": "evidence/central-priority-tests.json",
+      "actual": "expected exit 0, actual 0"
+    },
+    {
+      "id": "P04",
+      "kind": "central_synthetic_fixture",
+      "name": "Aqua fallback",
+      "status": "passed",
+      "evidence": "evidence/central-priority-tests.json",
+      "actual": "expected exit 0, actual 0"
+    },
+    {
+      "id": "P05",
+      "kind": "central_synthetic_fixture",
+      "name": "Pending prevents lower suppression",
+      "status": "passed",
+      "evidence": "evidence/central-priority-tests.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "P06",
+      "kind": "central_synthetic_fixture",
+      "name": "Different version does not match",
+      "status": "passed",
+      "evidence": "evidence/central-priority-tests.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "P07",
+      "kind": "central_synthetic_fixture",
+      "name": "Expired document does not suppress",
+      "status": "passed",
+      "evidence": "evidence/central-priority-tests.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "P08",
+      "kind": "central_synthetic_fixture",
+      "name": "No VEX remains failed",
+      "status": "passed",
+      "evidence": "evidence/central-priority-tests.json",
+      "actual": "expected exit 1, actual 1"
     }
   ]
 }

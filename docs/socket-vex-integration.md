@@ -1,10 +1,10 @@
 # Socket POC: PR report and VEX integration design
 
-Обновлено 8 ноября 2026. VEX-фильтрация в PR workflow пока **не включена**.
+Обновлено 8 ноября 2026. Текущие native и VEX PR workflow реализованы отдельно. Подробная инструкция: [socket-pr-workflows-guide.md](socket-pr-workflows-guide.md). Не исключённые CVE дают failed optional check; merge разрешён, пока check не required.
 
 ## Что делает PR workflow
 
-`.github/workflows/socket-pr-test.yaml` сканирует весь checkout PR, а не diff зависимостей.
+`.github/workflows/socket-native-pr.yaml` и `.github/workflows/socket-vex-pr.yaml` сканируют весь checkout PR, а не diff зависимостей. `socket-pr-test.yaml` теперь только ручные эксперименты.
 Socket CLI `1.13.1` сам рекурсивно обнаруживает поддерживаемые manifest/lock-файлы;
 список package.json/yarn.lock не задаётся. Действуют правила исключения CLI и проекта.
 Зависимости приложения не устанавливаются. Устанавливается только сам Socket CLI.
@@ -304,3 +304,23 @@ Native lifecycle можно повторить вручную:
 читает его, создаёт новый scan, удаляет resolution в finally и создаёт контрольный scan.
 Дополнительный always-run cleanup повторяет удаление только принадлежащей этому запуску записи.
 Обычные pull_request запуски по-прежнему выполняют только list и dry-run без сохранения исключений.
+
+
+## Текущие отдельные PR pipeline
+
+Native и VEX security checks намеренно завершаются failure при оставшихся CVE, включая Monitor.
+Checks не required: develop не имеет protection/applicable rulesets, GitHub возвращает
+MERGEABLE / UNSTABLE. Не используется continue-on-error.
+
+VEX pipeline загружает own → Docker DHI → Aqua из public Git snapshots и фиксирует SHA.
+Own repo клонирован в соседнюю папку vexel; изменения — https://github.com/myTestOrg0/vexel/pull/1.
+В own рабочем документе только under_investigation; synthetic priority fixtures отдельные.
+Docker DHI documents загружаются, но image-bound исключения не применяются к manifest-only
+Voting без verified DHI image context. Восемь central priority cases проходят.
+
+Измерительный reachability run 42488906212: package.json 3196 bytes, yarn.lock 526871,
+.socket.facts.json.br 96346; uncompressed facts 6534393 bytes. Это содержимое CLI upload
+streams, не весь сетевой трафик. Facts содержат metadata/filename/line positions;
+полный checkout/node_modules не отправляется manifest uploader как архив.
+В workflow нет production build; наблюдались npm pack и sparjs. Полная инструкция
+и границы наблюдения — в socket-pr-workflows-guide.md.

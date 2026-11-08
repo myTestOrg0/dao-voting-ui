@@ -1,0 +1,63 @@
+{
+  "synthetic": true,
+  "repository": "myTestOrg0/vexel",
+  "revision": "26937738d4c9824f8d1cb3c96557f7072595cd2b",
+  "cases": [
+    {
+      "id": "P01",
+      "name": "Own affected wins",
+      "expected": 1,
+      "actual": 1,
+      "passed": true
+    },
+    {
+      "id": "P02",
+      "name": "Own not_affected wins",
+      "expected": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "id": "P03",
+      "name": "Docker fallback",
+      "expected": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "id": "P04",
+      "name": "Aqua fallback",
+      "expected": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "id": "P05",
+      "name": "Pending prevents lower suppression",
+      "expected": 1,
+      "actual": 1,
+      "passed": true
+    },
+    {
+      "id": "P06",
+      "name": "Different version does not match",
+      "expected": 1,
+      "actual": 1,
+      "passed": true
+    },
+    {
+      "id": "P07",
+      "name": "Expired document does not suppress",
+      "expected": 1,
+      "actual": 1,
+      "passed": true
+    },
+    {
+      "id": "P08",
+      "name": "No VEX remains failed",
+      "expected": 1,
+      "actual": 1,
+      "passed": true
+    }
+  ]
+}
