@@ -109,6 +109,19 @@ def server_exit_code(rows):
     return 1 if any(f["action"] == "error" for f in rows) else 0
 
 
+def advisory_exit_code(rows):
+    """A red, optional check for unresolved vulnerabilities and actionable alerts."""
+    if any(f['action'] == 'unknown' for f in rows):
+        return 2
+    return int(any(f['action'] in ('error', 'warn') or
+                   (f.get('vulnerability') and f['action'] != 'ignore') for f in rows))
+
+
+def displayed(finding):
+    return finding['action'] in ('error', 'warn', 'unknown') or (
+        os.environ.get('SOCKET_FAIL_ON_FINDINGS') == 'true' and finding.get('vulnerability') and finding['action'] != 'ignore')
+
+
 def advisory_label(finding):
     ghsa = finding["ghsa"]
     if re.fullmatch(r"GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}", ghsa):
@@ -128,11 +141,15 @@ def render_summary(result, rows, manifests, component_count, org, sha, report_ur
     data = result["data"]
     counts = Counter(f["action"] for f in rows)
     cves = Counter(f["severity"] for f in rows if f["vulnerability"])
-    visible = [f for f in rows if f["action"] in ("error", "warn", "unknown")]
-    code = server_exit_code(rows)
+    visible = [f for f in rows if displayed(f)]
+    code = advisory_exit_code(rows) if os.environ.get("SOCKET_FAIL_ON_FINDINGS") == "true" else server_exit_code(rows)
     verdict = {0: "Server policy passed", 1: "Server policy failed", 2: "Server policy verification incomplete"}[code]
+    if os.environ.get('SOCKET_FAIL_ON_FINDINGS') == 'true':
+        verdict = {0: 'No unresolved findings', 1: 'Findings detected — optional failed check', 2: 'Verification incomplete'}[code]
     scan_id = data.get("id") or data.get("scanId")
     lines = ["## Socket dependency scan", "", f"**{verdict}** · {md(os.environ.get('SOCKET_SCAN_MODE', 'manifest snapshot'))} · Socket CLI 1.13.1", "", f"Organization: {md(org)} · commit: `{sha}` · scan: `{scan_id}`", ""]
+    if os.environ.get('SOCKET_FAIL_ON_FINDINGS') == 'true':
+        lines += ['This check fails for unresolved vulnerabilities, including Monitor. Merge remains allowed only while this check is not required by GitHub branch rules.', '']
     if report_url:
         lines += [f"[Open Socket report]({report_url})", ""]
     lines += ["| Components | Block | Warn | Monitor | Ignore | Unknown action |", "|---:|---:|---:|---:|---:|---:|", f"| {component_count} | {counts['error']} | {counts['warn']} | {counts['monitor']} | {counts['ignore']} | {counts['unknown']} |", "", "Actions and the final verdict use server-resolved alert.action, including server reachability decisions. Counts are deduplicated by component/version and advisory (or non-CVE alert type).", "", f"**Vulnerability findings:** Critical {cves['critical']} · High {cves['high']} · Medium {cves['medium']} · Low {cves['low']} · Unknown {cves['unknown']}.", "", "Monitor/Ignore findings are retained in the JSON artifact. Passing policy does not mean there are no vulnerabilities.", "", "### Findings needing attention", ""]
@@ -155,7 +172,7 @@ def render_summary(result, rows, manifests, component_count, org, sha, report_ur
 def write_summary(folder, content):
     (folder / "summary.md").write_text(content)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
+    if summary and os.environ.get("SOCKET_EVALUATION_MODE") != "collect":
         with open(summary, "a") as stream:
             stream.write(content)
 
@@ -166,7 +183,7 @@ def print_findings(rows, component_count):
     print(f"Server actions: components={component_count} Block={counts['error']} Warn={counts['warn']} Monitor={counts['monitor']} Ignore={counts['ignore']}")
     print("Package | Version | CVE/GHSA or alert | Severity | Server action | Fix")
     for finding in rows:
-        if finding["action"] not in ("error", "warn", "unknown"):
+        if not displayed(finding):
             continue
         values = [finding[key] for key in ("package", "version", "id", "severity", "action", "fixed_version")]
         safe = [re.sub(r"[\x00-\x1f\x7f]", " ", str(value))[:400] for value in values]
@@ -218,13 +235,14 @@ def main():
             pass  # Optional navigation metadata must not hide the findings.
         match = re.search(r"Found (\d+) files? to include in scan", output)
         content = render_summary(result, rows, manifests, component_count, org, os.environ["SCAN_SHA"], report_url, int(match[1]) if match else None)
-        code = 2 if unknown_actions else server_exit_code(rows)
+        policy_code = server_exit_code(rows)
+        code = 2 if unknown_actions else (advisory_exit_code(rows) if os.environ.get("SOCKET_FAIL_ON_FINDINGS") == "true" else policy_code)
         if unknown_actions:
             content = content.replace("**Server policy passed**", "**Server policy verification incomplete**").replace("**Server policy failed**", "**Server policy verification incomplete**")
             content += "\n**Verification incomplete:** the raw scan contains an unrecognized policy action.\n"
-        decision = {"source": "server alert.action", "scanId": scan_id,
+        decision = {"source": "server alert.action", "scanId": scan_id, "components": component_count,
                     "healthy": code == 0, "verification_complete": code != 2,
-                    "exit_code": code, "actions": dict(Counter(f["action"] for f in rows)),
+                    "exit_code": code, "server_policy_exit_code": policy_code, "actions": dict(Counter(f["action"] for f in rows)),
                     "creation": result}
         (folder / "report.json").write_text(json.dumps(decision, indent=2))
         (folder / "findings.json").write_text(json.dumps(rows, indent=2))
@@ -232,8 +250,10 @@ def main():
         write_summary(folder, content)
         print_findings(rows, component_count)
         print(f"Socket summary: {component_count} components, {len(rows)} grouped findings; scan {scan_id}")
+        if os.environ.get('SOCKET_EVALUATION_MODE') == 'collect' and code != 2:
+            return 0  # Collection completed; VEX evaluates findings in the following step.
         if code:
-            print("::error::Socket server policy blocked the snapshot or verification is incomplete; see Actions Summary")
+            print("::error::Socket findings detected or verification incomplete; see Actions Summary. Merge depends on required-check settings.")
         return code
     except (ValueError, OSError, KeyError, TypeError) as error:
         # Never print raw API bodies, credentials, or the captured CLI output.

@@ -1,9 +1,6 @@
-name: Socket PR test
+name: Socket POC experiments
 
 'on':
-  pull_request:
-    branches: [develop]
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       run_native_resolution_cycle:
@@ -23,90 +20,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dependency-policy:
-    name: Socket dependency scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
-      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
-      SCAN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
-
-    steps:
-      - name: Set report directory
-        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-results" >> "$GITHUB_ENV"
-
-      - name: Checkout candidate
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-
-      - name: Install Socket CLI
-        run: bash .github/scripts/install-socket-cli.sh
-
-      - name: Run Socket scan
-        shell: bash
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$SOCKET_RESULTS_DIR"
-          if [ -z "$SOCKET_SECURITY_API_KEY" ]; then
-            echo '::error::SOCKET_SECURITY_API_KEY is unavailable.'
-            exit 1
-          fi
-          # Scan the checkout; Socket discovers supported manifests and lockfiles.
-          # Create only: the following step evaluates server-resolved actions.
-          set +e
-          socket scan create \
-            --org "$SOCKET_ORG" \
-            --repo "$SOCKET_REPO" \
-            --branch "$SCAN_BRANCH" \
-            --commit-hash "$SCAN_SHA" \
-            --no-set-as-alerts-page \
-            --json . > "$SOCKET_RESULTS_DIR/cli-output.log" 2> "$SOCKET_RESULTS_DIR/cli-error.log"
-          scan_status=$?
-          set -e
-          printf '%s\n' "$scan_status" > "$SOCKET_RESULTS_DIR/cli-exit-code"
-          echo "Socket scan creation exit status: $scan_status"
-          if [ "$scan_status" -ne 0 ]; then
-            echo '::error::Socket scan creation failed. See Actions Summary.'
-          fi
-          exit "$scan_status"
-
-      - name: Evaluate server actions and write Summary
-        if: ${{ always() }}
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: python3 .github/scripts/socket-summary.py
-
-      - name: Probe native exclusion API without changing resolutions
-        if: ${{ always() }}
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_RESOLUTIONS_TEST_API_KEY || secrets.SOCKET_SECURITY_API_KEY }}
-        run: python3 .github/scripts/socket-native-probe.py
-
-      - name: Upload Socket report
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: socket-report
-          path: |
-            ${{ env.SOCKET_RESULTS_DIR }}/summary.md
-            ${{ env.SOCKET_RESULTS_DIR }}/report.json
-            ${{ env.SOCKET_RESULTS_DIR }}/findings.json
-            ${{ env.SOCKET_RESULTS_DIR }}/scan-artifacts.json
-            ${{ env.SOCKET_RESULTS_DIR }}/native-probe.json
-          if-no-files-found: warn
-          retention-days: 7
-
   reachability-poc:
     name: Socket full application reachability POC
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_reachability }}
@@ -117,6 +30,7 @@ jobs:
       SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
       SCAN_SHA: ${{ github.sha }}
       SOCKET_SCAN_MODE: full-application-reachability
+      SOCKET_FAIL_ON_FINDINGS: 'true'
     steps:
       - name: Set report directory
         run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-reach-results" >> "$GITHUB_ENV"
@@ -137,8 +51,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$SOCKET_RESULTS_DIR"
+          export SOCKET_TRACE_FILE="$SOCKET_RESULTS_DIR/process-trace.jsonl"
+          export NODE_OPTIONS="--import=$GITHUB_WORKSPACE/.github/scripts/socket-process-observer.mjs"
           set +e
-          socket scan create --reach --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
+          socket scan create --reach --reach-version 15.14.1 --reach-disable-analytics --reach-retain-facts-file --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
             --branch "$GITHUB_REF_NAME" --commit-hash "$SCAN_SHA" \
             --no-set-as-alerts-page --json . \
             > "$SOCKET_RESULTS_DIR/cli-output.log" 2> "$SOCKET_RESULTS_DIR/cli-error.log"
@@ -152,6 +68,11 @@ jobs:
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: python3 .github/scripts/socket-summary.py
+      - name: Measure data boundary and remove retained facts
+        if: ${{ always() }}
+        env:
+          SOCKET_TRACE_FILE: ${{ runner.temp }}/socket-reach-results/process-trace.jsonl
+        run: python3 .github/scripts/socket-reachability-inventory.py
       - name: Upload reachability report
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -163,6 +84,7 @@ jobs:
             ${{ env.SOCKET_RESULTS_DIR }}/findings.json
             ${{ env.SOCKET_RESULTS_DIR }}/scan-artifacts.json
             ${{ env.SOCKET_RESULTS_DIR }}/failure.json
+            ${{ env.SOCKET_RESULTS_DIR }}/reachability-inventory.json
           retention-days: 7
 
   evaluator-tests:
