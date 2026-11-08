@@ -1,6 +1,6 @@
 """POC OpenVEX overlay for npm findings. Sources are ordered highest priority first.
 
-Not enabled in the regular PR gate. Inputs must come from a trusted central source,
+Used only by the VEX PR variant. Inputs must come from a trusted central source,
 not unreviewed PR content. This adapter supports exact npm PURLs, not all OpenVEX
 product/identity variants or generic organizational risk acceptances.
 """

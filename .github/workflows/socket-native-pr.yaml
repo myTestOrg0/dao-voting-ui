@@ -58,15 +58,3 @@ jobs:
             ${{ env.SOCKET_RESULTS_DIR }}/*.json
             ${{ env.SOCKET_RESULTS_DIR }}/*.md
           retention-days: 7
-
-  tests:
-    name: Socket evaluator tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - name: Verify reviewed tool lock
-        run: bash .github/scripts/install-socket-cli.sh --verify-only
-      - name: Test native and VEX evaluator contracts
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts/tests -bv

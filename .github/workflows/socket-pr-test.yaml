@@ -1,141 +1,93 @@
-name: Socket POC experiments
+name: Socket develop baseline
 
 'on':
+  push:
+    branches: [develop]
   workflow_dispatch:
-    inputs:
-      run_native_resolution_cycle:
-        description: Create one temporary native resolution, rescan, revoke and verify
-        type: boolean
-        default: false
-      run_reachability:
-        description: Run the full application reachability POC as well
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: socket-pr-test-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: socket-develop-baseline
+  cancel-in-progress: false
 
 jobs:
-  reachability-poc:
-    name: Socket full application reachability POC
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_reachability }}
+  baseline:
+    name: Publish develop inventory and alerts
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
       SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
       SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
-      SCAN_SHA: ${{ github.sha }}
-      SOCKET_SCAN_MODE: full-application-reachability
+      SOCKET_PUBLISH_BASELINE: 'true'
       SOCKET_FAIL_ON_FINDINGS: 'true'
+      SCAN_BRANCH: develop
     steps:
-      - name: Set report directory
-        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-reach-results" >> "$GITHUB_ENV"
-      - name: Checkout candidate
+      # During manual POC runs tooling comes from the selected workflow branch.
+      # The scan target is always a separate, real develop checkout.
+      - name: Checkout workflow tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          path: tooling
           persist-credentials: false
+      - name: Checkout actual develop
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: develop
+          path: candidate
+          persist-credentials: false
+      - name: Record scanned commit and report directory
+        working-directory: candidate
+        run: |
+          echo "SCAN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-baseline-report" >> "$GITHUB_ENV"
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
-      - name: Install pinned Socket CLI
-        run: bash .github/scripts/install-socket-cli.sh
-      - name: Run full application analysis on this runner
-        shell: bash
+      - name: Install hash-pinned Socket CLI
+        run: bash tooling/.github/scripts/install-socket-cli.sh
+      - name: Publish develop as Socket dashboard baseline
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: bash "$GITHUB_WORKSPACE/tooling/.github/scripts/socket-create-scan.sh"
+      - name: Read server actions and show baseline vulnerabilities
+        if: ${{ always() }}
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: python3 "$GITHUB_WORKSPACE/tooling/.github/scripts/socket-summary.py"
+      - name: Verify dashboard head points to this scan
+        if: ${{ always() }}
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: |
-          set -euo pipefail
-          mkdir -p "$SOCKET_RESULTS_DIR"
-          export SOCKET_TRACE_FILE="$SOCKET_RESULTS_DIR/process-trace.jsonl"
-          export NODE_OPTIONS="--import=$GITHUB_WORKSPACE/.github/scripts/socket-process-observer.mjs"
-          set +e
-          socket scan create --reach --reach-version 15.14.1 --reach-disable-analytics --reach-retain-facts-file --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
-            --branch "$GITHUB_REF_NAME" --commit-hash "$SCAN_SHA" \
-            --no-set-as-alerts-page --json . \
-            > "$SOCKET_RESULTS_DIR/cli-output.log" 2> "$SOCKET_RESULTS_DIR/cli-error.log"
-          scan_status=$?
-          set -e
-          printf '%s\n' "$scan_status" > "$SOCKET_RESULTS_DIR/cli-exit-code"
-          echo "Full application scan creation exit status: $scan_status"
-          exit "$scan_status"
-      - name: Evaluate server actions and write Summary
-        if: ${{ always() }}
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: python3 .github/scripts/socket-summary.py
-      - name: Measure data boundary and remove retained facts
-        if: ${{ always() }}
-        env:
-          SOCKET_TRACE_FILE: ${{ runner.temp }}/socket-reach-results/process-trace.jsonl
-        run: python3 .github/scripts/socket-reachability-inventory.py
-      - name: Upload reachability report
+          python3 - <<'PY'
+          import importlib.util, json, os
+          from pathlib import Path
+          from urllib.parse import quote
+          spec = importlib.util.spec_from_file_location('summary', 'tooling/.github/scripts/socket-summary.py')
+          summary = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(summary)
+          folder = Path(os.environ['SOCKET_RESULTS_DIR'])
+          report = json.loads((folder / 'report.json').read_text())
+          repo = json.loads(summary.get_api(os.environ['SOCKET_ORG'], 'repos/' + quote(os.environ['SOCKET_REPO'], safe='')))
+          info = {key: repo.get(key) for key in ('id', 'name', 'default_branch', 'head_full_scan_id')}
+          info['expected_scan_id'] = report['scanId']
+          info['matches'] = info['head_full_scan_id'] == report['scanId'] and info['default_branch'] == 'develop'
+          (folder / 'baseline-head.json').write_text(json.dumps(info, indent=2))
+          print(json.dumps(info, indent=2))
+          if not info['matches']:
+              raise SystemExit('Socket dashboard head was not updated to the develop scan')
+          PY
+      - name: Upload baseline report even when findings fail the check
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: socket-reach-report
+          name: socket-baseline-report
           path: |
-            ${{ env.SOCKET_RESULTS_DIR }}/summary.md
-            ${{ env.SOCKET_RESULTS_DIR }}/report.json
-            ${{ env.SOCKET_RESULTS_DIR }}/findings.json
-            ${{ env.SOCKET_RESULTS_DIR }}/scan-artifacts.json
-            ${{ env.SOCKET_RESULTS_DIR }}/failure.json
-            ${{ env.SOCKET_RESULTS_DIR }}/reachability-inventory.json
-          retention-days: 7
-
-  evaluator-tests:
-    name: Socket and VEX evaluator tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - name: Verify CLI hash pin
-        run: bash .github/scripts/install-socket-cli.sh --verify-only
-      - name: Run tests
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts/tests -bv
-
-  native-resolution-poc:
-    name: Socket native resolution lifecycle POC
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_native_resolution_cycle }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: socket-native-resolution-poc-${{ github.repository }}
-      cancel-in-progress: false
-    env:
-      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
-      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
-    steps:
-      - name: Set result directory
-        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-native-cycle" >> "$GITHUB_ENV"
-      - name: Checkout candidate
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-      - name: Install pinned Socket CLI
-        run: bash .github/scripts/install-socket-cli.sh
-      - name: Test native create rescan revoke lifecycle
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_RESOLUTIONS_TEST_API_KEY || secrets.SOCKET_SECURITY_API_KEY }}
-        run: python3 .github/scripts/socket-native-cycle.py
-      - name: Retry cleanup of owned temporary resolution
-        if: ${{ always() }}
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_RESOLUTIONS_TEST_API_KEY || secrets.SOCKET_SECURITY_API_KEY }}
-        run: python3 .github/scripts/socket-native-cycle.py --cleanup-only
-      - name: Upload native lifecycle evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: socket-native-cycle
-          path: ${{ runner.temp }}/socket-native-cycle/*.json
+            ${{ env.SOCKET_RESULTS_DIR }}/*.json
+            ${{ env.SOCKET_RESULTS_DIR }}/*.md
           retention-days: 7

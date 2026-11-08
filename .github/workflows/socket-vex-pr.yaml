@@ -60,22 +60,3 @@ jobs:
             ${{ env.SOCKET_RESULTS_DIR }}/*.json
             ${{ env.SOCKET_RESULTS_DIR }}/*.md
           retention-days: 7
-
-  priority-tests:
-    name: Central VEX priority fixture tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - name: Set evidence directory
-        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/central-priority-tests" >> "$GITHUB_ENV"
-      - name: Test own Docker Aqua priority from central fixtures
-        run: python3 .github/scripts/test-central-vex.py
-      - name: Upload priority test evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: central-vex-priority-tests
-          path: ${{ runner.temp }}/central-priority-tests/*.json
-          retention-days: 7
