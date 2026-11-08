@@ -28,6 +28,19 @@ def independent_baseline(rows):
     return rows
 
 
+def sources_for_manifest_context(sources):
+    """Image-bound DHI assessments cannot exempt an unverified npm application."""
+    eligible = copy.deepcopy(sources)
+    for source in eligible:
+        source['eligible_for_product'] = True
+        source['loaded_statements'] = len(source['document']['statements'])
+        if source['repository'] == 'docker-hardened-images/advisories':
+            source['eligible_for_product'] = False
+            source['eligibility_reason'] = 'Source-manifest scan has no verified DHI image identity; image-bound assessments are inventory only.'
+            source['document']['statements'] = []
+    return eligible
+
+
 def main():
     folder = Path(os.environ['SOCKET_RESULTS_DIR'])
     folder.mkdir(parents=True, exist_ok=True)
@@ -39,13 +52,14 @@ def main():
         rows = independent_baseline(json.loads((folder / 'findings.json').read_text()))
         config = json.loads(Path('.github/socket-vex-sources.json').read_text())
         sources = fetch.load_sources(config, rows)
+        sources = sources_for_manifest_context(sources)
         result = vex.evaluate(rows, sources, config['product_id'])
         code = summary.advisory_exit_code(result['findings'])
         unresolved = sum(f.get('vulnerability') and f['action'] != 'ignore' for f in result['findings'])
-        provenance = [{k: s[k] for k in ('name', 'repository', 'revision', 'sha256', 'documents', 'npm_coverage')} for s in sources]
+        provenance = [{k: s[k] for k in ('name', 'repository', 'revision', 'sha256', 'documents', 'npm_coverage', 'eligible_for_product', 'loaded_statements')} for s in sources]
         report = {'source': 'Socket inventory + central VEX', 'exit_code': code, 'verification_complete': True,
                   'unresolved_vulnerabilities': unresolved, 'native_resolutions_honored': False,
-                  'product_id': config['product_id'], 'scanId': original['scanId'], 'sources': provenance}
+                  'product_id': config['product_id'], 'scanId': original['scanId'], 'components': original['components'], 'sources': provenance}
         raw = json.loads((folder / 'scan-artifacts.json').read_text())
         manifests = sorted({m['file'] for a in raw for m in a.get('manifestFiles', []) if m.get('file')})
         content = summary.render_summary({'data': {'id': original['scanId']}}, result['findings'], manifests,
@@ -60,8 +74,8 @@ def main():
                 content += f"| {summary.md(finding['package'])}@{summary.md(finding['version'])} / {summary.md(finding['id'])} | {summary.md(choice['status'])} | {summary.md(choice['source'])} |\n"
         content += '\n### Source snapshots\n\n'
         for source in provenance:
-            content += f"- {source['name']}: `{source['revision']}`; npm coverage: {source['npm_coverage']}; documents: {len(source['documents'])}.\n"
-        content += '\nNo Docker/Aqua npm document means no vendor exception for this npm scan; it does not mean these feeds were omitted.\n'
+            content += f"- {source['name']}: `{source['revision']}`; npm coverage: {source['npm_coverage']}; documents: {len(source['documents'])}; eligible for this product: {source['eligible_for_product']}.\n"
+        content += '\nDocker DHI documents were fetched but are not applicable without a verified DHI image identity. Aqua has no npm coverage in this snapshot. Both sources remain in provenance.\n'
         (folder / 'raw-server-report.json').write_text(json.dumps(original, indent=2))
         (folder / 'report.json').write_text(json.dumps(report, indent=2))
         (folder / 'findings-effective.json').write_text(json.dumps(result['findings'], indent=2))

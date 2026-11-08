@@ -38,6 +38,14 @@ class AdvisoryTests(unittest.TestCase):
         self.assertEqual(summary.advisory_exit_code(result),1)
         self.assertEqual(raw[0]['action'],'ignore')
 
+    def test_dhi_package_statement_cannot_suppress_a_non_dhi_application(self):
+        source=fetch.aggregate('docker-dhi','docker-hardened-images/advisories','a'*40,[('vendor.json',document('not_affected'))])
+        selected=pipeline.sources_for_manifest_context([source])
+        self.assertFalse(selected[0]['eligible_for_product'])
+        self.assertEqual(selected[0]['loaded_statements'],1)
+        self.assertEqual(fetch.vex.evaluate([finding('error')],selected,'urn:product')['exit_code'],1)
+        self.assertEqual(len(source['document']['statements']),1)
+
     def test_advisory_summary_and_log_include_monitored_cve(self):
         row=dict(finding(),severity='high',fixed_version='4.17.12',ghsa='')
         with patch.dict(os.environ,{'SOCKET_FAIL_ON_FINDINGS':'true'}):
