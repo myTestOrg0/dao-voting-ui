@@ -17,7 +17,7 @@ def probe():
     selector = {'location.repo': os.environ['SOCKET_REPO'], 'artifact.type': 'npm',
                 'artifact.name': 'lodash', 'artifact.version': '4.17.11',
                 'finding.alertType': 'criticalCVE'}
-    requests = [('list', 'GET', '?limit=1', None),
+    requests = [('list', 'GET', '?per_page=1', None),
                 ('create_dry_run', 'POST', '?dry_run=true',
                  {'reason': 'other', 'reason_text': 'POC API validation only',
                   'comment': 'Dry run only; no exception is persisted.', 'vigil_selector': selector})]

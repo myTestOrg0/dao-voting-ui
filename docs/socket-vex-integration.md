@@ -1,6 +1,6 @@
 # Socket POC: PR report and VEX integration design
 
-Проверено 6 ноября 2026. VEX-фильтрация в PR workflow пока **не включена**.
+Обновлено 8 ноября 2026. VEX-фильтрация в PR workflow пока **не включена**.
 
 ## Что делает PR workflow
 
@@ -117,7 +117,7 @@ Socket [alert resolutions](https://docs.socket.dev/docs/alert-resolutions) — �
 
 ## Предлагаемое рабочее решение для Socket
 
-Следующий этап — отдельный CI adapter после получения исходного Socket scan. На первом этапе
+В `.github/scripts/socket-vex-evaluate.py` реализован ограниченный npm/OpenVEX POC adapter; проверен offline CLI replay с синтетическими решениями. Следующий этап — его подключение к trusted central configuration после получения исходного Socket scan. На первом этапе
 он только добавляет колонки VEX status/source/reason в Summary, не меняя gating.
 Следующим этапом, после проверки fixtures, он может рассчитывать effective verdict.
 Создание scan, ошибки инфраструктуры и решение effective policy уже разделены.
@@ -179,7 +179,7 @@ managed scans на своей инфраструктуре. Для local mode и
 на своей инфраструктуре, а результаты анализа/SBOM metadata отправлять Socket.
 В metadata могут присутствовать имена файлов и сведения о вызовах: состав `.socket.facts.json`
 нужно проверить перед включением. По текущей документации нужен Enterprise/trial,
-Node 22+ и language toolchain. В POC full application mode не включён.
+Node 22+ и language toolchain. Full application mode отдельно протестирован через workflow_dispatch: scan feee194f-c636-4925-8ef9-4427c6d82b7f, 1433 компонента и 35 Warn против 53 в manifest режиме. Автоматически в каждом PR он не запускается.
 [Full application reachability](https://docs.socket.dev/docs/full-application-reachability).
 
 ## Центральное управление исключениями организации
@@ -265,3 +265,26 @@ OS packages, Node runtime, platform-specific/optional зависимости, ф
 
 [Docker SBOM attestations](https://docs.docker.com/build/metadata/attestations/sbom/),
 [Docker build attestations](https://docs.docker.com/build/metadata/attestations/).
+
+
+## Документирование тестов 8 ноября 2026
+
+Иллюстрированный отчёт: [Socket POC report](socket-poc/report.html).
+Машиночитаемая матрица: [test-results.json](socket-poc/test-results.json).
+Компактные доказательства хранятся в `socket-poc/evidence/`; raw reports доступны
+в указанных Actions runs и artifacts до истечения retention.
+
+В PR шаг Evaluate server actions теперь печатает Block/Warn package/version/CVE,
+severity, action и fix; Summary и JSON остаются доступны отдельно.
+CLI устанавливается по tarball SHA-512, dependency lock SHA-256 и всем dependency
+SRI через npm ci --ignore-scripts. Изменение lockfile отвергается до установки.
+
+Реальные запуски: PR run 42470524152 (manifest/log/hash/17 tests) и manual comparison
+42470519241 (manifest + full application reachability). В native resolution API
+GET и create dry-run вернули HTTP 403; создание/применение/отзыв не протестированы.
+Нужен отдельный `SOCKET_RESOLUTIONS_TEST_API_KEY` с соответствующими scopes.
+Тестовый secret предпочитается в API probe; scan token не получает write scopes.
+
+В VEX CLI replay проверены 10 сценариев на реальной находке с искусственным Block
+baseline; это не реальная оценка неприменимости и не production exclusion.
+Полный внешний feed sync и release image gate пока не реализованы.

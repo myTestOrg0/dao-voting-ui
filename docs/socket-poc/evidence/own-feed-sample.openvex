@@ -1,0 +1,24 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://example.invalid/vex/pkg%3Adeb%2Fdebian%2Flibexpat1",
+  "author": "Local Security Team",
+  "role": "Document Creator",
+  "timestamp": "2026-10-02T09:15:19Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2025-66382"
+      },
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libexpat1@2.8.3-1~deb13u1%2Bdhi2?arch=arm64&distro=debian-13.6"
+        }
+      ],
+      "status": "affected",
+      "action_statement": "Local security override: treat this vulnerability as affected.",
+      "action_statement_timestamp": "2026-10-02T09:15:19Z",
+      "status_notes": "Local VEX repository generated for testing dhi.io/python:3.13."
+    }
+  ]
+}

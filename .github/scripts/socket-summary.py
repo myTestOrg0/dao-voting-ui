@@ -240,7 +240,7 @@ def main():
         message = str(error)
         token = os.environ.get("SOCKET_SECURITY_API_KEY")
         if token:
-            message = message.replace(token, "[redacted]")
+            message = message.replace(token, "[redacted]").replace(base64.b64encode((token + ":").encode()).decode(), "[redacted]")
         (folder / "failure.json").write_text(json.dumps({"status": "verification_incomplete", "reason": message[:2000]}))
         write_summary(folder, "## Socket dependency scan\n\n**Report unavailable — verification incomplete.**\n\n" + md(message) + "\n\nInspect the scan step logs.\n")
         print("Verification incomplete: " + re.sub(r"[\x00-\x1f\x7f]", " ", message)[:2000])

@@ -1,0 +1,182 @@
+{
+  "as_of": "2026-11-08",
+  "tested_commit": "2f9cd457e4076cfb3aaedfc267f6b61b9d226f2e",
+  "cases": [
+    {
+      "id": "PR01",
+      "kind": "live",
+      "name": "Manifest scan with generic discovery",
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470524152",
+      "actual": "1433 components, 217 vulnerability findings, 53 Warn, exit 0"
+    },
+    {
+      "id": "PR02",
+      "kind": "live",
+      "name": "Full application reachability",
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470519241",
+      "actual": "1433 components, 217 vulnerability findings, 35 Warn, exit 0; creation/analysis step 66 sec"
+    },
+    {
+      "id": "OUT01",
+      "kind": "live",
+      "name": "CVE details inside job step log",
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470524152",
+      "actual": "FINDING lines contain package, version, CVE/GHSA, severity, server action and fix"
+    },
+    {
+      "id": "PIN01",
+      "kind": "live",
+      "name": "Hash pinned CLI install",
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470524152",
+      "actual": "CLI tarball SHA-512 and dependency lock SHA-256, 33 packages have SHA-512 SRI"
+    },
+    {
+      "id": "PIN02",
+      "kind": "fixture",
+      "name": "Reject altered dependency lock",
+      "status": "passed",
+      "evidence": ".github/scripts/tests/test_socket_vex.py",
+      "actual": "One byte change causes verification failure before installation"
+    },
+    {
+      "id": "N01",
+      "kind": "live",
+      "name": "Native resolution list",
+      "status": "blocked",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470524152",
+      "actual": "HTTP 403"
+    },
+    {
+      "id": "N02",
+      "kind": "live",
+      "name": "Native create dry run",
+      "status": "blocked",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470524152",
+      "actual": "HTTP 403, no resolution persisted"
+    },
+    {
+      "id": "N03",
+      "kind": "pending",
+      "name": "Native create apply rescan revoke",
+      "status": "not_run",
+      "evidence": "Requires separate resolution token and server snapshot validation",
+      "actual": "No end-to-end suppression claim"
+    },
+    {
+      "id": "UNIT01",
+      "kind": "fixture",
+      "name": "Unit and integration evaluator suite",
+      "status": "passed",
+      "evidence": "https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42470519241",
+      "actual": "17 test methods passed in Actions"
+    },
+    {
+      "id": "V01",
+      "kind": "offline_replay",
+      "name": "No VEX",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "V02",
+      "kind": "offline_replay",
+      "name": "Own not_affected overrides synthetic Block",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 0, actual 0"
+    },
+    {
+      "id": "V03",
+      "kind": "offline_replay",
+      "name": "Own affected prevents Docker suppression",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "V04",
+      "kind": "offline_replay",
+      "name": "Own not_affected wins over Docker affected",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 0, actual 0"
+    },
+    {
+      "id": "V05",
+      "kind": "offline_replay",
+      "name": "Version mismatch",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "V06",
+      "kind": "offline_replay",
+      "name": "Expired own decision",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "V07",
+      "kind": "offline_replay",
+      "name": "Under investigation prevents lower suppression",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "V08",
+      "kind": "offline_replay",
+      "name": "Aqua fallback",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 0, actual 0"
+    },
+    {
+      "id": "V09",
+      "kind": "offline_replay",
+      "name": "Missing source fails verification",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 2, actual 2"
+    },
+    {
+      "id": "V10",
+      "kind": "offline_replay",
+      "name": "Actual Debian own feed cannot suppress npm finding",
+      "status": "passed",
+      "evidence": "evidence/vex-replay.json",
+      "actual": "expected exit 1, actual 1"
+    },
+    {
+      "id": "V11",
+      "kind": "pending",
+      "name": "Production organizational OpenVEX decision",
+      "status": "not_run",
+      "evidence": "Requires an approved applicability assessment",
+      "actual": "Synthetic VEX was not enabled in normal PR gate"
+    },
+    {
+      "id": "REL01",
+      "kind": "pending",
+      "name": "Release image SBOM and promotion gate",
+      "status": "not_run",
+      "evidence": "Release workflow was not modified",
+      "actual": "Planned separate phase"
+    },
+    {
+      "id": "FEED01",
+      "kind": "partial",
+      "name": "Three-source priority",
+      "status": "partial",
+      "evidence": "V03 V04 V08 V10",
+      "actual": "Priority tested with synthetic sources; real own Debian document gives no npm match. Live Docker/Aqua matching not proven."
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+2026-11-08T10:14:06.7899318Z FINDING | lodash | 4.17.11 | CVE-2019-10744 | critical | warn | 4.17.12
+2026-11-08T10:14:06.7900604Z FINDING | next | 12.3.7 | GHSA-2464-fhr4-w9xw | critical | warn | 15.5.28
+2026-11-08T10:14:06.7901706Z FINDING | next | 12.3.7 | GHSA-2xp9-vwfh-vxw4 | critical | warn | 15.5.24
+2026-11-08T10:14:06.7902936Z FINDING | @babel/plugin-transform-modules-systemjs | 7.27.1 | CVE-2026-44728 | high | warn | 7.29.4
+2026-11-08T10:14:06.7904036Z FINDING | axios | 0.21.4 | CVE-2025-27152 | high | warn | 0.30.0
+2026-11-08T10:14:06.7904943Z FINDING | axios | 1.11.0 | CVE-2026-25639 | high | warn | 1.13.5

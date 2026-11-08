@@ -86,7 +86,7 @@ jobs:
       - name: Probe native exclusion API without changing resolutions
         if: ${{ always() }}
         env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_RESOLUTIONS_TEST_API_KEY || secrets.SOCKET_SECURITY_API_KEY }}
         run: python3 .github/scripts/socket-native-probe.py
 
       - name: Upload Socket report
