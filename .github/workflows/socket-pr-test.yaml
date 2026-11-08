@@ -6,6 +6,10 @@ name: Socket PR test
     types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
+      run_native_resolution_cycle:
+        description: Create one temporary native resolution, rescan, revoke and verify
+        type: boolean
+        default: false
       run_reachability:
         description: Run the full application reachability POC as well
         type: boolean
@@ -172,3 +176,44 @@ jobs:
         run: bash .github/scripts/install-socket-cli.sh --verify-only
       - name: Run tests
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts/tests -bv
+
+  native-resolution-poc:
+    name: Socket native resolution lifecycle POC
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_native_resolution_cycle }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: socket-native-resolution-poc-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
+      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
+    steps:
+      - name: Set result directory
+        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-native-cycle" >> "$GITHUB_ENV"
+      - name: Checkout candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install pinned Socket CLI
+        run: bash .github/scripts/install-socket-cli.sh
+      - name: Test native create rescan revoke lifecycle
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_RESOLUTIONS_TEST_API_KEY || secrets.SOCKET_SECURITY_API_KEY }}
+        run: python3 .github/scripts/socket-native-cycle.py
+      - name: Retry cleanup of owned temporary resolution
+        if: ${{ always() }}
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_RESOLUTIONS_TEST_API_KEY || secrets.SOCKET_SECURITY_API_KEY }}
+        run: python3 .github/scripts/socket-native-cycle.py --cleanup-only
+      - name: Upload native lifecycle evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: socket-native-cycle
+          path: ${{ runner.temp }}/socket-native-cycle/*.json
+          retention-days: 7
