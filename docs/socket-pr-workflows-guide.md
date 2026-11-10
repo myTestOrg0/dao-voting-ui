@@ -72,8 +72,11 @@ Tooling находится в соседнем checkout и не попадает
 --reach-fallback-to-regular-scan
 ```
 
-При успехе dashboard получает результат reachability; при глобальном отказе анализатора — обычный SCA fallback.
-Новый основной scan проверяется через `default_branch=develop` и совпадение `head_full_scan_id`.
+При успехе CLI публикует reachability scan типа `socket_tier1` с запросом head; при глобальном отказе анализатора — обычный SCA fallback типа `socket`.
+Repository API `head_full_scan_id` отражает legacy `socket` head. Поэтому для fallback проверяется его совпадение,
+а при отличающемся reachability ID проверяются scan_type, branch и commit через scan metadata.
+Активный typed head этим API не подтверждается: это явно записывается в Summary и baseline-head.json как matches=null,
+а не выдаётся за успешное сравнение. Несовпадение ID разных scan types само по себе не считается инфраструктурной ошибкой.
 Для этого нужен Socket `repo:list`: чтение metadata, не GitHub write.
 PR scans сохраняют `--no-set-as-alerts-page`, чтобы не заменять основной отчёт develop.
 
@@ -203,7 +206,7 @@ Shallow rescan создаёт новый scan на основе прежнего
 ## Проверки и история
 
 Текущие контрактные тесты находятся отдельно в socket-poc-lab/.github/scripts/test_socket_current.py:
-25 тестов, включая восемь центральных priority cases, Monitor-green, fallback, API retries, ошибки и VEX scopes.
+27 тестов, включая восемь центральных priority cases, Monitor-green, fallback, API retries, ошибки и VEX scopes.
 Artifacts: report.json, findings.json, scan-artifacts.json, summary.md; для VEX — provenance, для baseline — проверка head.
 Исторические результаты 09.11.2026 с красным Monitor сохранены как история старой политики;
 текущая политика определяется этим документом и новым кодом. Последние Actions run links фиксируются в описании PR.

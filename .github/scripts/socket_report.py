@@ -107,6 +107,8 @@ def render(report, rows):
     if report.get('scan_id'):
         lines += [f"[Socket report](https://socket.dev/dashboard/org/{report['org']}/sbom/{report['scan_id']})",
                   f"Commit: `{report['commit']}` · branch: `{md(report['branch'])}`", '']
+    if report.get('dashboard_note'):
+        lines += [md(report['dashboard_note']), '']
     for title, actions in [('Block and Warn', {'error', 'warn'}), ('Monitor (non-blocking)', {'monitor'})]:
         selected = [row for row in rows if row['action'] in actions]
         if selected:

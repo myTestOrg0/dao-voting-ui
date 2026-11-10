@@ -82,11 +82,22 @@ def apply_vex(folder, rows, target):
 
 
 def verify_baseline(folder, report):
+    """Verify the legacy SCA head or typed reachability metadata, without conflating them."""
     repo = json.loads(get_api(report['org'], 'repos/' + quote(os.environ['SOCKET_REPO'], safe='')))
     head = {key: repo.get(key) for key in ('default_branch', 'head_full_scan_id')}
     head['matches'] = head['default_branch'] == 'develop' and head['head_full_scan_id'] == report['scan_id']
+    if not head['matches'] and report['reach_requested'] and not report['fallback']:
+        # The legacy repository head is for scan_type=socket, not socket_tier1.
+        metadata = json.loads(get_api(report['org'], f"full-scans/{report['scan_id']}/metadata"))
+        valid = (head['default_branch'] == 'develop' and metadata.get('scan_type') == 'socket_tier1'
+                 and metadata.get('branch') == report['branch'] and metadata.get('commit_hash') == report['commit'])
+        if not valid:
+            raise ValueError('Reachability scan type, branch or commit could not be verified')
+        head.update(matches=None, scan_type='socket_tier1', scan_id=report['scan_id'], context_verified=True,
+                    note='Reachability publication requested; typed head is not exposed by the legacy repository API. Metadata verified; active typed head is not independently confirmed.')
+        report['dashboard_note'] = head['note']
     (folder / 'baseline-head.json').write_text(json.dumps(head, indent=2))
-    if not head['matches']:
+    if head['matches'] is False:
         raise ValueError('Socket dashboard head does not match the develop scan')
 
 
