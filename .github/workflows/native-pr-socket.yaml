@@ -1,0 +1,90 @@
+name: Native PR Socket
+
+on:
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-socket-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
+      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
+      SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
+    steps:
+      - name: Prepare report directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/socket-report"
+          echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-report" >> "$GITHUB_ENV"
+          echo "SOCKET_VEX_DIR=$RUNNER_TEMP/socket-vex" >> "$GITHUB_ENV"
+      - name: Checkout workflow tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: tooling
+          persist-credentials: false
+      - name: Checkout scan target
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Record scanned commit
+        working-directory: candidate
+        run: |
+          echo "SCAN_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install hash-pinned Socket CLI
+        run: |
+          echo '8e08f1210ed72a39f14ab565083a228591e50ed9e4716aa5e4d2c3f1fa46c023  tooling/.github/tools/socket-cli/package-lock.json' | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/socket-cli"
+          jq '.packages[""] + {private: true}' tooling/.github/tools/socket-cli/package-lock.json > "$RUNNER_TEMP/socket-cli/package.json"
+          cp tooling/.github/tools/socket-cli/package-lock.json "$RUNNER_TEMP/socket-cli/package-lock.json"
+          # npm verifies the SHA-512 integrity of the CLI and each locked dependency.
+          npm ci --prefix "$RUNNER_TEMP/socket-cli" --ignore-scripts --no-audit --no-fund
+          echo "$RUNNER_TEMP/socket-cli/node_modules/.bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/socket-cli/node_modules/.bin/socket" --version
+      - name: Run native CLI without a verdict wrapper
+        id: scan
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          socket scan create --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
+            --branch "$SCAN_BRANCH" --commit-hash "$SCAN_COMMIT" \
+            --no-set-as-alerts-page --report --report-level warn --markdown . \
+            | tee "$SOCKET_RESULTS_DIR/native-report.md"
+      - name: Publish native report
+        if: always()
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          echo "## Native Socket CLI: $SCAN_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          echo 'The native CLI reports Warn, but only Block fails its policy verdict.' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$SOCKET_RESULTS_DIR/native-report.md" ]; then
+            cat "$SOCKET_RESULTS_DIR/native-report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'CLI did not produce a report. See setup and scan steps.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload native report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-pr-socket
+          path: ${{ env.SOCKET_RESULTS_DIR }}/native-report.md
+          retention-days: 7

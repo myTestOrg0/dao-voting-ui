@@ -19,28 +19,37 @@ Severity CVE и action политики — разные поля. Critical CVE 
 
 ## Workflow и файлы
 
-- `socket-native-pr.yaml`: отдельный штатный CLI workflow без нашей policy-проверки; при Warn весь workflow зелёный.
-- `socket-vex-pr.yaml`: два независимых PR jobs для сравнения server-policy и собственного VEX verdict.
-- `socket-develop-baseline.yaml`: один develop reachability scan с fallback и публикацией основного dashboard report.
-- `socket-scan.yaml`: общий reusable workflow. Установка, checkout, секрет и artifact объявлены один раз.
-
-Файл `socket-pr-test.yaml` переименован в `socket-develop-baseline.yaml`.
-Тонкие caller workflows задают ref, название ветки и режим; reusable workflow выполняет общие шаги.
-Четыре обычных Python-модуля заменили прежние скрипты с динамическими импортами:
+Все команды установки, запуска Socket и скачивания результатов видны непосредственно в workflow.
+Общего reusable workflow и отдельного install-скрипта больше нет.
 
 | Файл | Назначение |
 |---|---|
-| `.github/scripts/socket_scan.py` | Создание scan, API, VEX orchestration, проверка dashboard head и классификация ошибок |
-| `.github/scripts/socket_report.py` | Нормализация findings, Block/Warn verdict, Summary и лог |
-| `.github/scripts/socket_vex.py` | Точное сопоставление npm identity/CVE и выбор первого применимого statement |
-| `.github/scripts/socket_vex_sources.py` | Области применимости источников и чтение доверенных Git snapshots |
-| `.github/scripts/install-socket-cli.sh` | Установка CLI после проверки хешей |
-| `.github/tools/socket-cli/dependencies.lock` | Socket 1.13.1 и транзитивные зависимости с integrity hashes |
-| `.github/socket-vex-sources.json` | Собственный продукт, репозитории и refs VEX |
+| `native-pr-socket.yaml` | PR scan штатным CLI; без нашего Python verdict |
+| `wrapped-pr-socket.yaml` | Два PR jobs: server policy и центральный VEX; различаются matrix.mode |
+| `wrapped-baseline-socket.yaml` | Push develop и ручной запуск: reachability с fallback, публикация baseline |
+| `.github/scripts/wrapped_report.py` | Разбор скачанного JSON, таблицы Summary и итоговый exit code |
+| `.github/scripts/wrapped_vex.py` | Сопоставление продукта/версии/CVE и выбор VEX statement |
+| `.github/scripts/wrapped_vex_sources.py` | Чтение уже скачанных VEX JSON; без сети и запуска Git |
+| `.github/tools/socket-cli/package-lock.json` | Socket 1.13.1 и транзитивные зависимости с integrity hashes |
+| `.github/socket-vex-sources.json` | Идентификатор продукта, источники и refs VEX |
+
+Префиксы `native` / `wrapped` отличают штатный verdict от нашей логики.
+`pr` означает pull_request; `baseline` — push в develop. Все три workflow допускают ручной запуск.
+Исходный socket.yaml сохранён без изменений.
+
+Установка — обычные Bash-команды: sha256sum проверяет lockfile, jq извлекает package.json,
+cp копирует lockfile, npm ci проверяет SHA-512 каждой зависимости. npm lifecycle scripts отключены.
+Lockfile машинный, его не нужно читать как программную логику.
+
+Скачивание результатов — явный curl с Basic auth и ограниченными retries.
+Скачивание VEX — явный git clone с выбранной веткой и записью commit SHA.
+Python не запускает внешние команды и не получает API secret: он обрабатывает только готовые файлы.
+Маленький режим wrapped_report.py scan-id извлекает scan ID: CLI даже с --json может печатать progress перед JSON,
+поэтому обычный jq на всём stdout ненадёжен.
 
 ## Нативный запуск
 
-Job Native CLI verdict запускает напрямую:
+Job в native-pr-socket.yaml запускает напрямую:
 
 ```sh
 socket scan create --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
@@ -88,11 +97,11 @@ Fallback с Warn/Block даёт 1; только Monitor — 0. Ошибка API 
 Создание scan автоматически не повторяется, чтобы не создавать дубликаты неидемпотентным запросом.
 
 Summary имеет отдельные разделы Findings, Reachability and fallback, Infrastructure and verification errors.
-Если настройка runner/установка CLI не завершились, общий workflow также сохраняет сообщение о неполной проверке.
+Если настройка runner/установка CLI не завершились, workflow сохраняет сообщение о неполной проверке.
 Unknown/missing_support отдельной CVE не равнозначны глобальному падению процесса.
 
-После merge workflow запускается при push в develop. До merge: Actions → Socket native CLI PR → Run workflow
-→ socket-pr-analysis → run_develop_checks=true. Этот ручной режим вызывает тот же develop workflow.
+После merge wrapped-baseline-socket.yaml запускается при push в develop и через Run workflow.
+До merge новый filename может быть недоступен для workflow_dispatch; контрольный запуск проводят в отдельной lab-ветке через уже зарегистрированный workflow, без добавления proxy в native PR workflow.
 
 Без `--reach` это не только сравнение версий с CVE-базой: Socket также использует сведения о malware,
 supply-chain поведении пакетов, лицензиях и доступных серверных dependency/precomputed reachability результатах.
@@ -206,7 +215,8 @@ Shallow rescan создаёт новый scan на основе прежнего
 ## Проверки и история
 
 Текущие контрактные тесты находятся отдельно в socket-poc-lab/.github/scripts/test_socket_current.py:
-27 тестов, включая восемь центральных priority cases, Monitor-green, fallback, API retries, ошибки и VEX scopes.
+25 тестов, включая восемь центральных priority cases, Monitor-green, fallback, ошибки, VEX scopes и evidence links.
+Python API retry tests удалены вместе с Python HTTP-клиентом: HTTP теперь выполняет curl в workflow.
 Artifacts: report.json, findings.json, scan-artifacts.json, summary.md; для VEX — provenance, для baseline — проверка head.
 Исторические результаты 09.11.2026 с красным Monitor сохранены как история старой политики;
 текущая политика определяется этим документом и новым кодом. Последние Actions run links фиксируются в описании PR.
@@ -301,3 +311,29 @@ Trivy нужен отдельно: в final image есть OS packages, runtime 
 нет подходящего own → DHI; нет own/DHI → Aqua; wrong digest/arch/version; отзыв own;
 полный image gate против одной изолированной finding. Реальное существование finding/CVE подтверждается raw scan,
 контрольный собственный statement явно помечается test-only и не публикуется как производственное заключение неприменимости.
+
+
+## Ссылка на репозиторий и обоснование в OpenVEX
+
+Да. Стандартный statement `@id` может быть URL конкретного документа/раздела;
+`status_notes` допускает пояснения и ссылки на материалы анализа. Например, фрагмент statement:
+
+```json
+{
+  "@id": "https://github.com/ORG/vexel/blob/COMMIT/pkg/npm/PACKAGE/vex.json#statement-id",
+  "status": "not_affected",
+  "justification": "vulnerable_code_not_in_execute_path",
+  "status_notes": "Evidence: https://github.com/ORG/APP/blob/COMMIT/docs/security/CVE-analysis.md"
+}
+```
+
+Это фрагмент: для полноценного statement также требуются vulnerability и products.
+Пример не означает, что какая-либо CVE уже признана неприменимой.
+Ссылка на immutable commit лучше ссылки на изменяемую ветку.
+URL не задаёт область применимости: она определяется products / subcomponents и точным сопоставлением пакета/версии/CVE.
+Один URL не заменяет justification или impact_statement.
+
+Наш Summary теперь показывает ссылку на фактически использованный VEX JSON в конкретном commit.
+findings.json также сохраняет statement_id и status_notes; vex-provenance.json — URL, commit и хеш документа.
+Ссылки из текста status_notes сохраняются как обоснование, не исполняются и не скачиваются автоматически.
+[OpenVEX statement fields](https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.md#statement-fields).
