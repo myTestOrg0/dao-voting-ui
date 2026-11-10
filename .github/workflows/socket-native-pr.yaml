@@ -1,82 +1,82 @@
-name: Lab native exception CLI comparison
+name: Lab native-python resolution comparison
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
-  group: native-exception-comparison
+  group: native-python-resolution-comparison
   cancel-in-progress: false
 
 jobs:
   compare:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
     env:
       SOCKET_ORG: lido-labs
       SOCKET_REPO: dao-voting-ui
-      SCAN_BRANCH: native-exception-comparison-${{ github.run_id }}
+      SCAN_BRANCH: native-python-comparison-${{ github.run_id }}
+      PR_NUMBER: '2'
     steps:
       - name: Prepare results
         run: |
-          mkdir -p "$RUNNER_TEMP/native-resolution-comparison"
-          echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/native-resolution-comparison" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/native-python-resolution"
+          echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/native-python-resolution" >> "$GITHUB_ENV"
       - name: Checkout trusted test tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           path: tooling
           persist-credentials: false
-      - name: Checkout fixed application commit
+      - name: Checkout fixed source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 1b4f7806567184dc99e5ff74bc0010943bf654c0
+          ref: 6d2adee
+          fetch-depth: 0
           path: candidate
           persist-credentials: false
-      - name: Record exact source SHA
+      - name: Record source SHA
         working-directory: candidate
         run: echo "SCAN_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          node-version: '24'
-      - name: Install hash-pinned Socket CLI
+          python-version: '3.12'
+      - name: Install hash-pinned Python CLI
         run: |
-          echo '8e08f1210ed72a39f14ab565083a228591e50ed9e4716aa5e4d2c3f1fa46c023  tooling/.github/tools/socket-cli.lock' | sha256sum --check
-          mkdir -p "$RUNNER_TEMP/socket-cli"
-          jq '.packages[""] + {private: true}' tooling/.github/tools/socket-cli.lock > "$RUNNER_TEMP/socket-cli/package.json"
-          cp tooling/.github/tools/socket-cli.lock "$RUNNER_TEMP/socket-cli/package-lock.json"
-          # npm verifies the SHA-512 integrity of the CLI and each locked dependency.
-          npm ci --prefix "$RUNNER_TEMP/socket-cli" --ignore-scripts --no-audit --no-fund
-          echo "$RUNNER_TEMP/socket-cli/node_modules/.bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/socket-cli/node_modules/.bin/socket" --version
-      - name: Compare before, active and revoked native resolution
+          echo 'b4e741886bd223db7a91ac7c41a2a09137aafd9018a8fd318df4b6858e9225cc  tooling/.github/tools/socket-python-cli.lock' | sha256sum --check
+          python -m pip install --require-hashes --only-binary=:all: -r tooling/.github/tools/socket-python-cli.lock
+          socketcli --version
+      - name: Compare native Python before, active and revoked resolution
         working-directory: candidate
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: bash "$GITHUB_WORKSPACE/tooling/.github/scripts/native-resolution-compare.sh"
+          GH_API_TOKEN: ${{ github.token }}
+        run: bash "$GITHUB_WORKSPACE/tooling/.github/scripts/native-python-resolution-compare.sh"
       - name: Retry owned-resolution cleanup
         if: always()
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: |
-          if [ -f tooling/.github/scripts/native-resolution-compare.sh ]; then
-            bash tooling/.github/scripts/native-resolution-compare.sh cleanup
+          if [ -f tooling/.github/scripts/native-python-resolution-compare.sh ]; then
+            bash tooling/.github/scripts/native-python-resolution-compare.sh cleanup
           fi
-      - name: Upload comparison evidence only
+      - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: native-exception-cli-comparison
+          name: native-python-resolution-comparison
           path: |
             ${{ env.SOCKET_RESULTS_DIR }}/comparison.*
             ${{ env.SOCKET_RESULTS_DIR }}/deleted.json
+            ${{ env.SOCKET_RESULTS_DIR }}/baseline.json
             ${{ env.SOCKET_RESULTS_DIR }}/*/comparison.json
-            ${{ env.SOCKET_RESULTS_DIR }}/*/cli-report.json
-            ${{ env.SOCKET_RESULTS_DIR }}/*/report.json
+            ${{ env.SOCKET_RESULTS_DIR }}/*/python-report.json
+            ${{ env.SOCKET_RESULTS_DIR }}/*/python-pr-comment.md
             ${{ env.SOCKET_RESULTS_DIR }}/*/target-artifact.json
           retention-days: 7
