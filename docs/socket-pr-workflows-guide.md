@@ -25,7 +25,8 @@ Severity CVE и action политики — разные поля. Critical CVE 
 | Файл | Назначение |
 |---|---|
 | `native-pr-socket.yaml` | PR scan штатным CLI; без нашего Python verdict |
-| `wrapped-pr-socket.yaml` | Два PR jobs: server policy и центральный VEX; различаются matrix.mode |
+| `wrapped-pr-socket.yaml` | Отдельный PR test case: серверная policy и нативные исключения Socket; VEX не загружается |
+| `wrapped-pr-socket-vex.yaml` | Отдельный PR test case: наша обработка центрального VEX |
 | `wrapped-baseline-socket.yaml` | Push develop и ручной запуск: reachability с fallback, публикация baseline |
 | `.github/scripts/wrapped_report.py` | Разбор скачанного JSON, таблицы Summary и итоговый exit code |
 | `.github/scripts/wrapped_vex.py` | Сопоставление продукта/версии/CVE и выбор VEX statement |
@@ -34,7 +35,7 @@ Severity CVE и action политики — разные поля. Critical CVE 
 | `.github/socket-vex-sources.json` | Идентификатор продукта, источники и refs VEX |
 
 Префиксы `native` / `wrapped` отличают штатный verdict от нашей логики.
-`pr` означает pull_request; `baseline` — push в develop. Все три workflow допускают ручной запуск.
+`pr` означает pull_request; `baseline` — push в develop. Все четыре workflow допускают ручной запуск.
 Исходный socket.yaml сохранён без изменений.
 
 Установка — обычные Bash-команды: sha256sum проверяет lockfile, jq извлекает package.json,
@@ -406,3 +407,11 @@ Raw SBOM, raw findings и effective VEX лучше сохранять разде
 Не нужно складывать все версии JSON в Git или объединять организацию в один SBOM.
 Если понадобится поиск затронутых проектов и постоянная переоценка всей организации,
 можно отдельно рассмотреть Dependency-Track; это не обязательный компонент текущего POC.
+
+
+Серверные исключения и центральный VEX проверяются разными workflow, без matrix и вызовов друг друга.
+В wrapped-pr-socket.yaml используется SOCKET_MODE=policy: действие сервера принимается как есть,
+включая результат native Alert Resolutions; собственные VEX файлы не скачиваются и не применяются.
+Наша обвязка здесь только формирует Summary и делает Block/Warn красными.
+В wrapped-pr-socket-vex.yaml используется SOCKET_MODE=vex и отдельный VEX snapshot.
+Concurrency groups и artifact names различаются, поэтому эти test cases не отменяют и не перезаписывают друг друга.

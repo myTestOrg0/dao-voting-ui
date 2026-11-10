@@ -10,16 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: wrapped-socket-${{ github.event.pull_request.number || github.ref }}
+  group: wrapped-pr-socket-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   scan:
-    name: Wrapped PR — ${{ matrix.mode }} (optional)
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [policy, vex]
+    name: Server policy and native exceptions (optional)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -29,13 +25,12 @@ jobs:
       SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
       SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
       SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
-      SOCKET_MODE: ${{ matrix.mode }}
+      SOCKET_MODE: policy
     steps:
       - name: Prepare report directory
         run: |
           mkdir -p "$RUNNER_TEMP/socket-report"
           echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-report" >> "$GITHUB_ENV"
-          echo "SOCKET_VEX_DIR=$RUNNER_TEMP/socket-vex" >> "$GITHUB_ENV"
       - name: Checkout workflow tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -86,23 +81,11 @@ jobs:
             --connect-timeout 15 --max-time 120 --user "$SOCKET_SECURITY_API_KEY:" \
             "https://api.socket.dev/v0/orgs/$SOCKET_ORG/full-scans/$scan_id?include_license_details=true" \
             --output "$SOCKET_RESULTS_DIR/scan-artifacts.ndjson"
-      - name: Download own VEX snapshot
-        id: vex
-        if: matrix.mode == 'vex'
-        run: |
-          # DHI and Aqua are image-only feeds; this PR scan reads only our application VEX.
-          vex_repository=$(jq -r '.sources[0].repository' tooling/.github/socket-vex-sources.json)
-          vex_ref=$(jq -r '.sources[0].ref' tooling/.github/socket-vex-sources.json)
-          test "$vex_repository" = 'myTestOrg0/vexel'
-          GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone --quiet --depth 1 \
-            --single-branch --branch "$vex_ref" -- "https://github.com/$vex_repository.git" "$SOCKET_VEX_DIR"
-          git -C "$SOCKET_VEX_DIR" rev-parse HEAD > "$SOCKET_VEX_DIR/revision.txt"
       - name: Write Summary and return the policy verdict
         if: always()
         env:
           SCAN_OUTCOME: ${{ steps.scan.outcome }}
           DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
-          VEX_OUTCOME: ${{ steps.vex.outcome }}
         run: |
           python3 tooling/.github/scripts/wrapped_report.py
       - name: Report setup failure if no Summary was produced
@@ -116,7 +99,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: wrapped-pr-socket-${{ matrix.mode }}
+          name: wrapped-pr-socket
           path: |
             ${{ env.SOCKET_RESULTS_DIR }}/*.json
             ${{ env.SOCKET_RESULTS_DIR }}/*.md
