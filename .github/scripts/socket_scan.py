@@ -40,8 +40,8 @@ def create_scan(folder, report):
     command = ['socket', 'scan', 'create', '--org', report['org'], '--repo', os.environ['SOCKET_REPO'],
                '--branch', report['branch'], '--commit-hash', report['commit'], '--json']
     if os.environ.get('SOCKET_PUBLISH_BASELINE') == 'true':
-        if report['branch'] != 'develop' or report['reach_requested']:
-            raise ValueError('Only the manifest develop scan may publish the dashboard baseline')
+        if report['branch'] != 'develop':
+            raise ValueError('Only develop may publish the dashboard baseline')
         command += ['--default-branch', '--set-as-alerts-page']
     else:
         command += ['--no-set-as-alerts-page']
