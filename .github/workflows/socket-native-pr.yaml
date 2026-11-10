@@ -1,4 +1,4 @@
-name: Socket lockfile backend experiment
+name: Socket dashboard metadata diagnostic
 on:
   workflow_dispatch:
 permissions:
