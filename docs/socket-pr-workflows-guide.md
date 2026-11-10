@@ -431,3 +431,38 @@ securityPolicy.securityPolicyRules[alert.type].action. Следовательн�
 В VEX test case нужен также итог после собственного resolver, которого штатный CLI не выполняет.
 Поэтому wrapped report содержит сведения для наших двух test cases, а не копию штатного CLI report.
 Сама форма Markdown не обязательна: полезная часть — выбранное server/effective action, CVE/package и итог gate.
+
+
+## Контрольный тест CLI против server wrapper на native resolution — 10.11.2026
+
+[Live Actions run 42810580540](https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42810580540),
+lab branch codex/socket-lockfile-probe, harness commit b30ae2e, Socket CLI 1.13.1 с проверенным integrity.
+Все три scans созданы на одном application SHA 1b4f7806567184dc99e5ff74bc0010943bf654c0.
+В каждой фазе CLI и wrapper получают одинаковый scan ID. Между фазами создаётся новый scan того же source SHA,
+чтобы сервер применил создание/отзыв resolution. Ни один scan не заменяет develop dashboard baseline.
+
+Реальная находка: lodash@4.17.11 / CVE-2019-10744, тип criticalCVE, действие org policy Warn.
+Selector ограничен dao-voting-ui + npm + namespace="" + lodash + 4.17.11 + criticalCVE + этой CVE.
+Причина other: временный тест интеграции, не утверждение о неприменимости уязвимости.
+Политика не изменялась: hash полного securityPolicyRules одинаков во всех фазах.
+
+| Фаза | Org policy | Серверное action | Находка в CLI report | CLI process exit | Wrapper process exit | Verdict только этой CVE |
+|---|---|---|---|---:|---:|---:|
+| До исключения | Warn | Warn / org-policy | Warn | 0 | 1 | 1 |
+| Исключение активно | Warn | Ignore / resolution | **По-прежнему Warn** | 0 | 1 | **0** |
+| Исключение отозвано | Warn | Warn / org-policy | Warn | 0 | 1 | 1 |
+
+CLI запущен как socket scan report --report-level warn --license --json <scan_id> <output>.
+Его process exit 0 во всех фазах не доказывает применение исключения: исходное действие Warn и так неблокирующее.
+Полный wrapper остаётся с process exit 1 из-за других Warn. Последняя колонка — отдельный расчёт тем же verdict
+на одной выбранной finding, а не process exit сканирования всего репозитория.
+У lodash этой версии ровно один criticalCVE alert, поэтому строка CLI однозначно относится к целевой CVE,
+хотя штатный CLI renderer группирует данные по типу алерта, а не выводит CVE ID.
+
+Во всех фазах 1433 компонента; контрольные CVE-2020-8203 и CVE-2021-23337 остаются Warn.
+Удаление созданного resolution подтверждено DELETE и последующим GET HTTP 404; cleanup выполняется также при ошибке.
+
+Вывод для закреплённого CLI 1.13.1: native resolution применяется сервером, но не снимает finding из CLI policy report.
+Серверную обвязку пока сохраняем. Результат относится к проверенному scan report path и этой версии CLI;
+поведение других версий/интеграций и Block-исключений этим Warn-тестом не доказано.
+Исходники теста и архив результатов оставлены вне application PR; в нём добавлена только эта запись в документации.
