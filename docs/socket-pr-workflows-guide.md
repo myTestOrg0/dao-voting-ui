@@ -215,7 +215,7 @@ Shallow rescan создаёт новый scan на основе прежнего
 ## Проверки и история
 
 Текущие контрактные тесты находятся отдельно в socket-poc-lab/.github/scripts/test_socket_current.py:
-25 тестов, включая восемь центральных priority cases, Monitor-green, fallback, ошибки, VEX scopes и evidence links.
+31 тест, включая восемь центральных priority cases, Monitor-green, fallback, ошибки, VEX scopes, evidence links, изоляцию репозиториев и effective VEX.
 Python API retry tests удалены вместе с Python HTTP-клиентом: HTTP теперь выполняет curl в workflow.
 Artifacts: report.json, findings.json, scan-artifacts.json, summary.md; для VEX — provenance, для baseline — проверка head.
 Исторические результаты 09.11.2026 с красным Monitor сохранены как история старой политики;
@@ -337,3 +337,72 @@ URL не задаёт область применимости: она опред
 findings.json также сохраняет statement_id и status_notes; vex-provenance.json — URL, commit и хеш документа.
 Ссылки из текста status_notes сохраняются как обоснование, не исполняются и не скачиваются автоматически.
 [OpenVEX statement fields](https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.md#statement-fields).
+
+
+## Исключения только для указанных репозиториев
+
+В собственном OpenVEX products задаёт точный URL каждого разрешённого application repository.
+Внутри каждого продукта subcomponents содержит точный PURL зависимости с версией:
+
+```json
+"products": [
+  {
+    "@id": "https://github.com/myTestOrg0/dao-voting-ui",
+    "subcomponents": [{"@id": "pkg:npm/lodash@4.17.11"}]
+  },
+  {
+    "@id": "https://github.com/myTestOrg0/another-approved-repo",
+    "subcomponents": [{"@id": "pkg:npm/lodash@4.17.11"}]
+  }
+]
+```
+
+Это пример scope, не реальное утверждение неприменимости. Текущие own statements остаются under_investigation.
+Обвязка получает текущий owner/repo из GITHUB_REPOSITORY, а не из переносимого product_id в конфигурации.
+Собственный statement без совпавшего repository product, в том числе один bare package PURL,
+не снимает finding. Wildcards не поддерживаются. Другой owner с тем же repo name не совпадает.
+Одновременно должны совпасть repository, package/version и CVE/GHSA.
+
+Если заявление нужно для нескольких репозиториев, каждый перечисляется в products со своим subcomponents.
+Утверждение об использовании одной версии пакета в приложении не доказывает, что одинаковое исключение применимо в другом приложении.
+Текущий product scope привязан к repository в целом; для branch/release/digest потребуются отдельные точные product identifiers.
+
+## Effective VEX
+
+Общая логика выбора находится в существующем wrapped_vex.py, без нового скрипта или workflow.
+Сначала проверяется применимость источника к типу продукта, затем repository/component/version/CVE,
+затем берётся первый matching statement по own → DHI → Aqua.
+Отсутствие matching statement позволяет проверить следующий источник; affected/under_investigation его останавливают.
+
+После выбора формируется artifact effective-vex.json: только выбранные statements и только текущий repository product.
+В нём сохраняются исходные статусы и ссылки на источники; timestamps собственных statements наследуются из исходного документа.
+Находки без подходящего VEX сохраняют policy action и не превращаются в выдуманные not_affected statements.
+Если ничего не подошло, OpenVEX с пустым statements не создаётся: официальный JSON Schema требует хотя бы один statement.
+Наш exit code рассчитывается по тем же выбранным решениям; effective-vex.json не является вторым независимым resolver.
+
+Для application scan сейчас работает только own. Полная цепочка трёх image-источников остаётся контролируемым тестом;
+реальный DHI image run отложен. Image output должен дополнительно совпадать с digest/platform,
+прежде чем передавать его Trivy как единственный заранее разрешённый VEX.
+
+Гарантию изоляции обеспечивает наш matcher. Не каждый сторонний OpenVEX consumer сопоставляет GitHub repository URL:
+для него необходим такой же context-aware matcher либо предварительная фильтрация строго под текущий artifact.
+Общий effective VEX для всех приложений выпускать не следует.
+
+## SBOM и центральное хранение
+
+Socket экспортирует результаты scan в CycloneDX или SPDX через API:
+GET /v0/orgs/{org}/export/cdx/{scan_id} и /export/spdx/{scan_id}.
+Оба endpoint помечены Beta, требуют report:read и расходуют квоту; неподдерживаемые ecosystems фильтруются.
+[Socket CycloneDX export](https://docs.socket.dev/reference/exportcdx), [SPDX export](https://docs.socket.dev/reference/exportspdx).
+В этом PR экспорт не включён и новые права токену не запрашиваются.
+
+Рекомендуемая основа — централизованно хранить immutable SBOM каждого release artifact:
+repository + source SHA + image digest + platform + generator/version + время создания.
+Socket SBOM описывает найденный им application graph; final-image SBOM от Trivy дополняет его OS/runtime составом.
+Raw SBOM, raw findings и effective VEX лучше сохранять раздельно, чтобы исключения не удаляли сведения о составе продукта.
+
+Для POC достаточно Actions artifacts. Для долговременного хранения releases — существующий registry с поддержкой SBOM accessories/referrers
+или object storage с контролируемой retention, доступом и индексом repo/version/digest.
+Не нужно складывать все версии JSON в Git или объединять организацию в один SBOM.
+Если понадобится поиск затронутых проектов и постоянная переоценка всей организации,
+можно отдельно рассмотреть Dependency-Track; это не обязательный компонент текущего POC.

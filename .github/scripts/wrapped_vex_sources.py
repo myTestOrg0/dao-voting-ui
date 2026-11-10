@@ -65,6 +65,7 @@ def load_sources(config, findings, target):
         )
         if not document["expired"]:
             for statement in document["document"]["statements"]:
+                statement.setdefault("timestamp", document["document"]["timestamp"])
                 statement["evidence_url"] = document_url
                 statements.append(statement)
 
