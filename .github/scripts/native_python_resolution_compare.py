@@ -28,14 +28,16 @@ def phase(folder):
         and a["pkg_version"] == VERSION
         and (a.get("props") or {}).get("cveId") == CVE
     ]
-    actions = [
-        (
-            "error"
-            if a.get("error")
-            else "warn" if a.get("warn") else "ignore" if a.get("ignore") else "monitor"
-        )
-        for a in target
-    ]
+    actions = sorted(
+        {
+            (
+                "error"
+                if a.get("error")
+                else "warn" if a.get("warn") else "ignore" if a.get("ignore") else "monitor"
+            )
+            for a in target
+        }
+    )
     artifacts = [
         json.loads(line)
         for line in (folder / "scan-artifacts.ndjson").read_text().splitlines()
@@ -81,6 +83,7 @@ def phase(folder):
         "server_action_source": alerts[0].get("actionSource"),
         "python_target_reported": bool(target),
         "python_target_actions": actions,
+        "python_target_instances": len(target),
         "python_process_exit": code,
         "controls": controls,
         "components": len(

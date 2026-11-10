@@ -36,7 +36,7 @@ jobs:
       - name: Checkout fixed source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 6d2adee
+          ref: 6d2adee5606bbbd67ae7e2772c8b853ebd69a263
           fetch-depth: 0
           path: candidate
           persist-credentials: false
