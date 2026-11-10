@@ -2,6 +2,10 @@ name: Lab native-python resolution comparison
 
 on:
   workflow_dispatch:
+    inputs:
+      probe_resolution_access:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,6 +17,7 @@ concurrency:
 
 jobs:
   compare:
+    if: ${{ !inputs.probe_resolution_access }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -80,3 +85,25 @@ jobs:
             ${{ env.SOCKET_RESULTS_DIR }}/*/python-pr-comment.md
             ${{ env.SOCKET_RESULTS_DIR }}/*/target-artifact.json
           retention-days: 7
+
+  probe:
+    if: inputs.probe_resolution_access
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read target metadata and dry-run exact resolution selectors
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        shell: bash
+        run: |
+          base=https://api.socket.dev/v0/orgs/lido-labs
+          curl --fail-with-body --silent --show-error --user "$SOCKET_SECURITY_API_KEY:" \
+            "$base/repos/dao-voting-ui" | jq '{id,name,slug,integration_type,integration_org_slug,workspace,default_branch}'
+          for repository in dao-voting-ui myTestOrg0/dao-voting-ui; do
+            jq -n --arg repo "$repository" '{reason:"other",reason_text:"Dry run only",comment:"Native Python access probe; no record is saved",vigil_selector:{"location.repo":$repo,"artifact.type":"npm","artifact.namespace":"","artifact.name":"lodash","artifact.version":"4.17.11","finding.alertType":"criticalCVE","finding.cveId":"CVE-2019-10744"}}' > "$RUNNER_TEMP/request.json"
+            status=$(curl --silent --show-error --connect-timeout 15 --max-time 60 \
+              --user "$SOCKET_SECURITY_API_KEY:" --header 'Content-Type: application/json' \
+              --request POST --data-binary "@$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/response.json" \
+              --write-out '%{http_code}' "$base/alerts/resolutions?dry_run=true")
+            echo "Selector $repository: HTTP $status"
+            jq . "$RUNNER_TEMP/response.json"
+          done
