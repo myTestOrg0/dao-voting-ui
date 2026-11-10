@@ -30,7 +30,7 @@ Severity CVE и action политики — разные поля. Critical CVE 
 | `.github/scripts/wrapped_report.py` | Разбор скачанного JSON, таблицы Summary и итоговый exit code |
 | `.github/scripts/wrapped_vex.py` | Сопоставление продукта/версии/CVE и выбор VEX statement |
 | `.github/scripts/wrapped_vex_sources.py` | Чтение уже скачанных VEX JSON; без сети и запуска Git |
-| `.github/tools/socket-cli/package-lock.json` | Socket 1.13.1 и транзитивные зависимости с integrity hashes |
+| `.github/tools/socket-cli.lock` | Socket 1.13.1 и транзитивные зависимости с integrity hashes |
 | `.github/socket-vex-sources.json` | Идентификатор продукта, источники и refs VEX |
 
 Префиксы `native` / `wrapped` отличают штатный verdict от нашей логики.
@@ -39,7 +39,7 @@ Severity CVE и action политики — разные поля. Critical CVE 
 
 Установка — обычные Bash-команды: sha256sum проверяет lockfile, jq извлекает package.json,
 cp копирует lockfile, npm ci проверяет SHA-512 каждой зависимости. npm lifecycle scripts отключены.
-Lockfile машинный, его не нужно читать как программную логику.
+Lockfile машинный, его не нужно читать как программную логику. Имя socket-cli.lock намеренно не совпадает с манифестами package manager: иначе автообнаружение Socket добавит зависимости CLI в scan приложения. Для npm он копируется в package-lock.json только вне scan target.
 
 Скачивание результатов — явный curl с Basic auth и ограниченными retries.
 Скачивание VEX — явный git clone с выбранной веткой и записью commit SHA.

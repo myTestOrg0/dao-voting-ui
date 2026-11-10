@@ -138,7 +138,8 @@ def evaluate(findings, sources, product_id):
                 "reason": statement.get("impact_statement")
                 or statement.get("justification")
                 or statement.get("action_statement")
-                or "Fixed in this product version",
+                or statement.get("status_notes")
+                or statement["status"].replace("_", " "),
             }
             if statement["status"] in ("not_affected", "fixed"):
                 finding["action"] = "ignore"

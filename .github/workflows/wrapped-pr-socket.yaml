@@ -57,10 +57,10 @@ jobs:
           node-version: '24'
       - name: Install hash-pinned Socket CLI
         run: |
-          echo '8e08f1210ed72a39f14ab565083a228591e50ed9e4716aa5e4d2c3f1fa46c023  tooling/.github/tools/socket-cli/package-lock.json' | sha256sum --check
+          echo '8e08f1210ed72a39f14ab565083a228591e50ed9e4716aa5e4d2c3f1fa46c023  tooling/.github/tools/socket-cli.lock' | sha256sum --check
           mkdir -p "$RUNNER_TEMP/socket-cli"
-          jq '.packages[""] + {private: true}' tooling/.github/tools/socket-cli/package-lock.json > "$RUNNER_TEMP/socket-cli/package.json"
-          cp tooling/.github/tools/socket-cli/package-lock.json "$RUNNER_TEMP/socket-cli/package-lock.json"
+          jq '.packages[""] + {private: true}' tooling/.github/tools/socket-cli.lock > "$RUNNER_TEMP/socket-cli/package.json"
+          cp tooling/.github/tools/socket-cli.lock "$RUNNER_TEMP/socket-cli/package-lock.json"
           # npm verifies the SHA-512 integrity of the CLI and each locked dependency.
           npm ci --prefix "$RUNNER_TEMP/socket-cli" --ignore-scripts --no-audit --no-fund
           echo "$RUNNER_TEMP/socket-cli/node_modules/.bin" >> "$GITHUB_PATH"
