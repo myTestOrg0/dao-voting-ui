@@ -141,7 +141,7 @@ def render(report, rows):
         "",
         "### Findings",
         "",
-        "Monitor findings are reported but do not fail this check.",
+        "Only Block and Warn findings are listed. Full results remain in the JSON artifacts.",
         "",
         "| Components | Block | Warn | Monitor | Ignore |",
         "|---:|---:|---:|---:|---:|",
@@ -161,20 +161,16 @@ def render(report, rows):
         ]
     if report.get("dashboard_note"):
         lines += [md(report["dashboard_note"]), ""]
-    for title, actions in [
-        ("Block and Warn", {"error", "warn"}),
-        ("Monitor (non-blocking)", {"monitor"}),
-    ]:
-        selected = [row for row in rows if row["action"] in actions]
-        if selected:
-            lines += [
-                f"<details><summary>{title}: {len(selected)}</summary>",
-                "",
-                table(selected),
-                "",
-                "</details>",
-                "",
-            ]
+    selected = [row for row in rows if row["action"] in ("error", "warn")]
+    if selected:
+        lines += [
+            f"<details><summary>Block and Warn: {len(selected)}</summary>",
+            "",
+            table(selected),
+            "",
+            "</details>",
+            "",
+        ]
     lines += ["### Reachability and fallback", ""]
     if report.get("fallback"):
         lines += [
@@ -228,7 +224,7 @@ def save(folder, report, rows):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
             stream.write(content)
     for row in rows:
-        if row["action"] != "ignore":
+        if row["action"] in ("error", "warn"):
             print(
                 "FINDING | "
                 + " | ".join(

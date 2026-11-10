@@ -6,7 +6,7 @@
 |---|---|---|---|
 | Block | красный | красный | красный, если не снят применимым VEX |
 | Warn | зелёный с отчётом | красный | красный, если не снят применимым VEX |
-| Monitor | зелёный | зелёный с отчётом | зелёный с отчётом |
+| Monitor | зелёный | зелёный; только счётчик и JSON artifacts | зелёный; только счётчик и JSON artifacts |
 | Ignore | зелёный | зелёный | VEX рассматривается независимо от native Resolutions |
 | Неполные данные / инфраструктурный сбой | штатный ненулевой CLI exit | код 2 | код 2 |
 
@@ -415,3 +415,19 @@ Raw SBOM, raw findings и effective VEX лучше сохранять разде
 Наша обвязка здесь только формирует Summary и делает Block/Warn красными.
 В wrapped-pr-socket-vex.yaml используется SOCKET_MODE=vex и отдельный VEX snapshot.
 Concurrency groups и artifact names различаются, поэтому эти test cases не отменяют и не перезаписывают друг друга.
+
+
+## Вывод Monitor и назначение wrapped report
+
+Построчные Monitor не выводятся в Actions log и основную таблицу findings в Summary.
+В Summary остаётся общий счётчик; findings.json и scan-artifacts.json сохраняют полные результаты.
+Warn/Block по-прежнему выводятся и дают exit 1. Native CLI использует report-level warn и также не перечисляет Monitor.
+
+Для native запуска используется собственный Markdown-отчёт CLI, без нашего renderer.
+Для server-policy test case итог берётся из alert.action в API scan: это готовое действие сервера.
+В исходниках закреплённого CLI 1.13.1 generateReport вместо этого выбирает
+securityPolicy.securityPolicyRules[alert.type].action. Следовательно, вывод CLI нельзя автоматически
+считать эквивалентом per-alert server decisions, включая native resolutions и другую серверную обработку.
+В VEX test case нужен также итог после собственного resolver, которого штатный CLI не выполняет.
+Поэтому wrapped report содержит сведения для наших двух test cases, а не копию штатного CLI report.
+Сама форма Markdown не обязательна: полезная часть — выбранное server/effective action, CVE/package и итог gate.
