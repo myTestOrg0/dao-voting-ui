@@ -24,7 +24,8 @@ Severity CVE и action политики — разные поля. Critical CVE 
 
 | Файл | Назначение |
 |---|---|
-| `native-pr-socket.yaml` | Автоматический PR scan штатным Node CLI, Summary и обновляемый PR-комментарий; без нашего Python verdict |
+| `native-pr-socket.yaml` | Native Node comparison case: автоматический PR scan, Summary и PR-комментарий через gh |
+| `native-python-pr-socket.yaml` | Native Python test case: встроенный PR-комментарий, --disable-ignore и full snapshot через пустой control baseline |
 | `wrapped-pr-socket.yaml` | Ручной test case через workflow_dispatch: серверная policy и нативные исключения Socket; VEX не загружается |
 | `wrapped-pr-socket-vex.yaml` | Ручной test case через workflow_dispatch: наша обработка центрального VEX |
 | `wrapped-baseline-socket.yaml` | Push develop и ручной запуск: reachability с fallback, публикация baseline |
@@ -35,7 +36,7 @@ Severity CVE и action политики — разные поля. Critical CVE 
 | `.github/socket-vex-sources.json` | Идентификатор продукта, источники и refs VEX |
 
 Префиксы `native` / `wrapped` отличают штатный verdict от нашей логики.
-`pr` означает pull_request; `baseline` — push в develop. Все четыре workflow допускают ручной запуск.
+`pr` означает pull_request; `baseline` — push в develop. Все пять workflow допускают ручной запуск.
 Исходный socket.yaml сохранён без изменений.
 
 Установка — обычные Bash-команды: sha256sum проверяет lockfile, jq извлекает package.json,
@@ -470,7 +471,7 @@ CLI запущен как socket scan report --report-level warn --license --jso
 
 ## Текущий native PR mode и комментарии
 
-Автоматически на pull_request запускается native-pr-socket.yaml. Оба wrapped workflow сохранены как ручные test cases.
+Автоматически на pull_request запускаются два native test cases: Node и Python. Оба wrapped workflow сохранены как ручные test cases.
 Native использует один checkout точного PR head SHA, inline установку hash-pinned Node CLI 1.13.1 и прямую команду scan create --report.
 Node CLI сам формирует Markdown и process exit; Python scripts в этом workflow не вызываются.
 Warn показываются и не делают native policy verdict красным; Monitor не перечисляются.
@@ -550,3 +551,77 @@ SCM integration получает GitHub token через GH_API_TOKEN; Socket to
 [CLI reference](https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/docs/cli-reference.md),
 [comment processing](https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/socketsecurity/core/scm_comments.py),
 [exit handling](https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/socketsecurity/output.py).
+
+
+## Native Python PR test case
+
+Файл native-python-pr-socket.yaml — отдельный workflow с socketsecurity 2.11.13 / socketcli.
+CLI и 19 dependencies закреплены версиями и SHA-256 в socket-python-cli.lock;
+pip использует --require-hashes --only-binary=:all:. Lock рассчитан на CPython 3.12 / Linux x86_64.
+Новых Python helper scripts в application PR не добавлено: команды видны в YAML.
+
+Последовательность:
+
+1. Checkout точного PR head с полной историей.
+2. Установка проверенного CLI.
+3. Native API-mode scan синтетического package.json без dependencies во временной папке runner.
+   Его отдельная branch native-python-control-<run_id> не является develop и не меняет dashboard baseline.
+4. Native SCM comparison настоящего snapshot PR с этим контрольным пустым scan.
+5. Сам Python CLI создаёт или обновляет свой security PR comment. Summary/JSON сохраняются как artifacts.
+
+Пустой control baseline выбран намеренно: POC проверяет весь snapshot, а SCM-комментарий Python CLI 2.11.13
+строится из new_alerts. --strict-blocking расширяет gate/JSON на unchanged, но сам по себе не включает их в native SCM comment.
+С контрольным baseline реальные находки snapshot попадают в new_alerts и видны в PR.
+Это не обычный diff с develop; для production net-new проверки control baseline нужно заменить реальным base scan.
+
+Основные параметры:
+
+- --scm github: встроенный GitHub adapter, а не печать Markdown для последующего gh.
+- --repo: Socket repository slug dao-voting-ui; --owner: integration owner myTestOrg0.
+- --base-scan-id: ID только что созданного control scan.
+- --ignore-commit-files: не пропускать сравнение, если изменён только workflow, а не dependency files.
+- --strict-blocking: учитывать unchanged Block findings при diff gating; Warn не становится Block.
+- --disable-ignore: полностью выключить suppression по PR comments, включая ignore-all.
+- --disable-overview: не создавать второй dependency-overview comment.
+- --json-file / --summary-file / --report-link-file: штатные CLI artifacts, без собственного renderer.
+
+Обычный native-python workflow не создаёт и не удаляет resolutions; эти операции выполняются только в отдельной lab-проверке.
+GitHub token имеет contents:read и pull-requests:write. Socket API token и GitHub token — разные credentials.
+
+[Первый native-python run](https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42839755924) прошёл успешно
+и сам опубликовал [PR comment](https://github.com/myTestOrg0/dao-voting-ui/pull/2#issuecomment-6770725958).
+В JSON есть lodash@4.17.11 / CVE-2019-10744 с Warn. Один CVE может иметь несколько instances;
+число JSON rows нельзя напрямую приравнивать к количеству уникальных уязвимостей.
+
+Текущий токен не имеет прав на новый diff-scans API: Python CLI явно логирует Insufficient permissions
+и успешно выполняет legacy streaming comparison. Это завершённый fallback, не --disable-blocking.
+Для нового API документация клиента указывает diff-scans:create/list и full-scans:list.
+
+### Native resolution lifecycle: состояние проверки
+
+[До исключения](https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42841125274):
+1433 компонента, criticalCVE policy Warn, server action Warn, native Python target Warn, process exit 0.
+Две control CVE остаются Warn; --disable-ignore включён, native security comment обновлён.
+
+Создание исключения пока заблокировано: POST alerts/resolutions?dry_run=true вернул HTTP 403
+с details.requiredScopes=["alert-resolution:create"].
+[Read-only/dry-run probe](https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42842082330)
+подтвердил этот ответ для short и fully qualified repo selector.
+В этой попытке POST без dry_run не выполнялся; постоянный resolution не создавался.
+После выдачи разрешения требуется завершить active/revoked phases; результат Python native suppression до этого не заявляется доказанным.
+
+## Нативная публикация комментариев и выбор CLI
+
+Python CLI имеет встроенный SCM adapter, который вызывает GitHub API создания/редактирования comments.
+Node CLI 1.13.1 scan create --report формирует Markdown; в нашем workflow публикацию выполняет gh.
+Сам --pull-request задаёт metadata scan и не является включением GitHub comment posting.
+Команда Node scan github скачивает manifests default branch через GitHub API; это также не PR-comment publisher.
+
+Практическое разделение documented roles: Node — универсальные API/package/developer tools и Firewall/manifest commands;
+Python — CI/SCM orchestration, scan diff, built-in comments и интеграционные output formats.
+Оба работают с Socket backend и поддерживаемыми ecosystems, а не только с языком своей реализации.
+
+Для наших PR-требований Python — предпочтительный кандидат: меньше собственного glue code и используются per-alert API actions.
+Окончательную замену server wrapper нужно принимать после полного native resolution lifecycle test.
+Node остаётся полезен для package analysis, install-time Firewall и генерации manifests.
+Release gate требует отдельной валидации: Python full-scan path без comparison автоматически не блокирует findings.
