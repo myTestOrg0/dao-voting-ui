@@ -19,8 +19,8 @@ Severity CVE и action политики — разные поля. Critical CVE 
 
 ## Workflow и файлы
 
-- `socket-native-pr.yaml`: два независимых PR jobs для сравнения штатного CLI и нашей server-policy проверки.
-- `socket-vex-pr.yaml`: PR job с собственным VEX verdict.
+- `socket-native-pr.yaml`: отдельный штатный CLI workflow без нашей policy-проверки; при Warn весь workflow зелёный.
+- `socket-vex-pr.yaml`: два независимых PR jobs для сравнения server-policy и собственного VEX verdict.
 - `socket-develop-baseline.yaml`: обычный baseline develop и независимый reachability job.
 - `socket-scan.yaml`: общий reusable workflow. Установка, checkout, секрет и artifact объявлены один раз.
 
@@ -50,7 +50,7 @@ socket scan create --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
 
 Выход проходит через tee в файл; Bash pipefail сохраняет исходный ненулевой CLI verdict.
 Наш Python evaluator здесь не вызывается. Markdown штатного CLI добавляется в Summary без изменения verdict.
-Поэтому этот job должен быть зелёным при одних Warn, а соседний Server Block and Warn — красным.
+Поэтому этот job должен быть зелёным при одних Warn, а Server Block and Warn в другом workflow — красным.
 Оба проверяют весь снимок PR, каждый создаёт собственный scan. Это демонстрационное сравнение, а не рекомендуемое дублирование для каждого production PR.
 `--report-level warn` управляет отображением алертов, а не превращает Warn в Block.
 Native CLI может повторно применять правила по типу алерта и отличаться от серверного alert.action.
@@ -95,7 +95,7 @@ Unknown/missing_support для отдельной CVE не равнозначн�
 
 После merge baseline запускается при push в develop; также предусмотрен ручной запуск.
 До merge новый workflow-файл может отсутствовать в списке workflow default branch. Для проверки из ветки POC:
-Actions → Socket PR native and policy comparison → Run workflow → socket-pr-analysis → run_develop_checks=true.
+Actions → Socket native CLI PR → Run workflow → socket-pr-analysis → run_develop_checks=true.
 Этот ручной режим вызывает именно переименованный develop workflow, без PR jobs.
 
 ## Области применимости VEX
@@ -190,3 +190,18 @@ Shallow rescan создаёт новый scan на основе прежнего
 Artifacts: report.json, findings.json, scan-artifacts.json, summary.md; для VEX — provenance, для baseline — проверка head.
 Исторические результаты 09.11.2026 с красным Monitor сохранены как история старой политики;
 текущая политика определяется этим документом и новым кодом. Последние Actions run links фиксируются в описании PR.
+
+## Живая проверка обновлённой интеграции
+
+На commit efb36df выполнены PR jobs и ручной develop-запуск:
+
+- Native CLI job: success, без Python verdict.
+- Server policy и VEX: verification_complete=true, 1433 компонента, 53 Warn, 1050 Monitor, 383 Ignore, exit 1.
+- Develop baseline: head matches=true, 1433 компонента, 53 Warn, exit 1.
+- Develop reachability: 1433 компонента, 35 Warn, 1068 Monitor, 383 Ignore; глобального fallback нет, errors=[]; exit 1 из-за Warn.
+
+[PR native/policy comparison run](https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42769069044),
+[develop baseline/reachability run](https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42769122259).
+После этого native перенесён в отдельный workflow, чтобы его зелёный статус был виден на уровне всего workflow.
+Fallback и инфраструктурные отказы проверены контролируемыми тестами; в живом reachability-запуске отказа не было.
+Runtime scripts сокращены с 731 до 559 строк; lockfile инструмента не менялся.

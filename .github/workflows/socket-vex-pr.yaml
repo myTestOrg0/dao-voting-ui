@@ -1,4 +1,4 @@
-name: Socket VEX PR
+name: Socket policy and VEX PR
 
 on:
   pull_request:
@@ -14,6 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  policy:
+    name: Server Block and Warn (optional)
+    uses: ./.github/workflows/socket-scan.yaml
+    with:
+      source_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      source_branch: ${{ github.head_ref || github.ref_name }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
   vex:
     name: Central VEX Block and Warn (optional)
     uses: ./.github/workflows/socket-scan.yaml

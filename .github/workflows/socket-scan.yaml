@@ -87,7 +87,18 @@ jobs:
         run: |
           echo "## Native Socket CLI verdict: $NATIVE_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
           echo 'Warn is reported but only Block fails the native policy verdict.' >> "$GITHUB_STEP_SUMMARY"
-          cat "$SOCKET_RESULTS_DIR/native-report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$SOCKET_RESULTS_DIR/native-report.md" ]; then
+            cat "$SOCKET_RESULTS_DIR/native-report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Native CLI did not complete. See setup/runner errors.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Report setup errors if no structured report exists
+        if: ${{ failure() && inputs.mode != 'native' }}
+        run: |
+          if [ ! -f "$SOCKET_RESULTS_DIR/summary.md" ]; then
+            echo '{"exit_code":2,"verification_complete":false,"errors":["Setup or command failed before a structured report was produced"]}' > "$SOCKET_RESULTS_DIR/report.json"
+            printf '## Socket scan\n\n### Findings\nUnavailable.\n\n### Reachability and fallback\nNot verified.\n\n### Infrastructure and verification errors\nSetup or command failed; see job logs.\n' | tee "$SOCKET_RESULTS_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Upload report
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

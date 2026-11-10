@@ -146,5 +146,3 @@ def save(folder, report, rows):
         if row['action'] != 'ignore':
             print('FINDING | ' + ' | '.join(md(row[key]) for key in ('package', 'version', 'id', 'severity', 'action')))
     print(f"Socket verdict: exit={report['exit_code']}; fallback={bool(report.get('fallback'))}; errors={len(report['errors'])}")
-
-
