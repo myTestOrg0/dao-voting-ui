@@ -24,9 +24,9 @@ Severity CVE и action политики — разные поля. Critical CVE 
 
 | Файл | Назначение |
 |---|---|
-| `native-pr-socket.yaml` | PR scan штатным CLI; без нашего Python verdict |
-| `wrapped-pr-socket.yaml` | Отдельный PR test case: серверная policy и нативные исключения Socket; VEX не загружается |
-| `wrapped-pr-socket-vex.yaml` | Отдельный PR test case: наша обработка центрального VEX |
+| `native-pr-socket.yaml` | Автоматический PR scan штатным Node CLI, Summary и обновляемый PR-комментарий; без нашего Python verdict |
+| `wrapped-pr-socket.yaml` | Ручной test case через workflow_dispatch: серверная policy и нативные исключения Socket; VEX не загружается |
+| `wrapped-pr-socket-vex.yaml` | Ручной test case через workflow_dispatch: наша обработка центрального VEX |
 | `wrapped-baseline-socket.yaml` | Push develop и ручной запуск: reachability с fallback, публикация baseline |
 | `.github/scripts/wrapped_report.py` | Разбор скачанного JSON, таблицы Summary и итоговый exit code |
 | `.github/scripts/wrapped_vex.py` | Сопоставление продукта/версии/CVE и выбор VEX statement |
@@ -175,7 +175,7 @@ VEX меняет наш Actions verdict; dashboard Socket не переписы�
 Organization secret SOCKET_SECURITY_API_KEY должен быть доступен целевым application repos.
 Secret, созданный только в actions repo, сам по себе не передаётся во все приложения.
 Socket API token должен иметь доступ к соответствующим Socket repositories; для native report нужны create/list scans и чтение policy.
-GitHub GITHUB_TOKEN остаётся contents:read; результаты jobs публикует сама платформа Actions, Socket App не устанавливается.
+Без PR-комментариев достаточно contents:read; для выбранного native comment mode добавляется pull-requests:write. Socket App не устанавливается.
 Для fork PR secrets обычно недоступны — нужна отдельная политика, а не выполнение непроверенного кода с secrets через pull_request_target.
 
 Настройка: Org Settings → Repository → Rulesets → New branch ruleset; выбрать repositories и защищаемые branches,
@@ -466,3 +466,87 @@ CLI запущен как socket scan report --report-level warn --license --jso
 Серверную обвязку пока сохраняем. Результат относится к проверенному scan report path и этой версии CLI;
 поведение других версий/интеграций и Block-исключений этим Warn-тестом не доказано.
 Исходники теста и архив результатов оставлены вне application PR; в нём добавлена только эта запись в документации.
+
+
+## Текущий native PR mode и комментарии
+
+Автоматически на pull_request запускается native-pr-socket.yaml. Оба wrapped workflow сохранены как ручные test cases.
+Native использует один checkout точного PR head SHA, inline установку hash-pinned Node CLI 1.13.1 и прямую команду scan create --report.
+Node CLI сам формирует Markdown и process exit; Python scripts в этом workflow не вызываются.
+Warn показываются и не делают native policy verdict красным; Monitor не перечисляются.
+
+К permissions добавлено только pull-requests:write поверх contents:read. GH_TOKEN передаётся шагу публикации комментария.
+Готовый native Markdown копируется в Actions Summary и PR-комментарий с ссылкой на run и source SHA.
+Через gh api ищется комментарий github-actions[bot] с маркером socket-native-report:
+если он существует, выполняется PATCH; иначе POST. Чужие bot/user comments не перезаписываются.
+Обработка @SocketSecurity ignore и issue_comment trigger не добавлены: публикация отчёта не включает suppression.
+Код размещён прямо в workflow, без отдельного comment script, reusable workflow или стороннего commenting action.
+
+POC запускается для PR из веток того же repository; fork PR пропускаются, поскольку обычный pull_request не получает Socket secret и write token.
+Отдельный доверенный поток публикации для forks этим POC не реализуется; pull_request_target с исполнением PR кода не используется.
+При ошибке CLI комментарий показывает failure и ссылку на Actions; отсутствие отчёта не выдаётся за чистый scan.
+Ранее измеренное отличие native report от server actions сохраняется: комментарий публикует именно штатный результат CLI.
+
+## Node CLI и Python CLI — разные инструменты
+
+Сравнение относится к нашему Node CLI socket 1.13.1 и исследованному Python CLI socketsecurity 2.11.13,
+source commit bb77908c9921f77ef6b8e0008a29937fe725811d. Main Node repository уже разрабатывает 2.x prerelease,
+поэтому выводы о закреплённом 1.13.1 нельзя переносить на все новые версии.
+
+| Свойство | Node CLI | Python CLI |
+|---|---|---|
+| Установка / команда | npm package socket / socket | PyPI package socketsecurity / socketcli; Python >=3.11 |
+| Основной профиль | Набор команд scan, diff, package analysis, package-manager Firewall | CI/SCM orchestration: baseline, diff, PR comments, output formats |
+| Языки проверяемого проекта | Поддерживаемые Socket ecosystems | Поддерживаемые Socket ecosystems; не только Python |
+| Обычный PR flow | У нас full snapshot через scan create --report | Ориентирован на сравнение с baseline; доступен выбор base scan/commit |
+| Действия алертов | В проверенном 1.13.1 report пересчитываются по policy[type] | Core переносит action из API в Issue flags |
+| GitHub PR comments | В нашем workflow публикация готового Markdown через gh | Встроенная SCM integration с --scm github и --pr-number |
+| Comment suppression | Наш workflow не читает ignore commands | Встроенная обработка ignore commands; отключается --disable-ignore |
+| Вывод | У нас native Markdown и Summary | Console/JSON, SARIF, GitLab report и SCM comments |
+| Reachability | --reach и используемый нами fallback flag | --reach через тот же класс Coana engine; есть собственные требования/flags |
+
+В Python diff mode по умолчанию gate рассматривает новые Block/error alerts; Warn сами не дают exit 1.
+--strict-blocking включает также unchanged Block findings в diff. Это не превращает Warn в Block.
+При успешной проверке exit 0, blocking findings exit 1; API/runtime failures по умолчанию exit 3.
+--disable-blocking принудительно даёт 0 даже при инфраструктурной ошибке, поэтому это не эквивалент optional required check.
+Особенность исследованной Python версии: full-scan path без comparison автоматически отключает blocking;
+--strict-blocking работает только в diff mode. Это важно перед заменой release/full-snapshot gate.
+Native GitHub check можно оставить необязательным через rulesets, сохранив настоящий ненулевой exit при Block.
+
+Серверные native resolutions и server-applied action Python читает другим путём, чем проверенный Node report.
+Это подтверждено исходниками Core; end-to-end цикл native resolution именно с Python CLI здесь пока не проводился.
+Свои raw OpenVEX feeds / приоритеты own→DHI→Aqua Python CLI автоматически не реализует: это отдельная задача интеграции.
+
+## Может ли Python CLI подавлять находки в PR
+
+Да, в SCM PR/diff flow он читает команды из PR discussion, например:
+
+```text
+@SocketSecurity ignore npm/lodash@4.17.11
+@SocketSecurity ignore-all
+```
+
+Первый вариант фильтрует alerts указанного package/version в обрабатываемом PR наборе, а не одну конкретную CVE.
+Версия * также поддерживается matcher; ignore-all ещё шире. Это локальное решение CLI по PR comments,
+не создание Socket native resolution и не изменение OpenVEX или политики в dashboard.
+На обычном PR scan matching new_alerts удаляются перед расчётом verdict: последний новый Block может исчезнуть и exit стать 0.
+--strict-blocking отдельно проверяет unchanged alerts; comment filtering new_alerts не следует считать универсальным обходом всех findings.
+
+CLI считывает комментарии при запуске. Автоматический запуск от нового комментария требует issue_comment workflow;
+обычный pull_request trigger на комментарий не срабатывает. Comment-only flow может обновить текст отчёта без нового scan:
+само появление ignore comment не переписывает результат старого Actions run.
+Для возвращения finding удаляют/правят ignore comment и запускают проверку заново.
+
+В 2.11.13 проверяются права автора команды: GitHub write/maintain/admin разрешены; read-only автор отклоняется.
+--ignore-authorization=enforce по умолчанию допускает ignore с предупреждением, если права нельзя определить.
+strict отклоняет команду при неопределённых правах; off отключает проверку автора.
+Для нашего требования полного запрета comment suppression правильный параметр — --disable-ignore:
+он выключает фильтрацию и скрывает инструкции ignore в генерируемых security comments.
+Публикация PR comments при этом остаётся доступной. Флаг не отключает серверные native resolutions или policy Ignore.
+
+SCM integration получает GitHub token через GH_API_TOKEN; Socket token — через SOCKET_SECURITY_API_KEY или SOCKET_SECURITY_API_TOKEN.
+Для публикации комментариев нужен PR write; Socket GitHub App для CLI SCM integration не обязателен.
+Исследованы [README](https://github.com/SocketDev/socket-python-cli),
+[CLI reference](https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/docs/cli-reference.md),
+[comment processing](https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/socketsecurity/core/scm_comments.py),
+[exit handling](https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/socketsecurity/output.py).
