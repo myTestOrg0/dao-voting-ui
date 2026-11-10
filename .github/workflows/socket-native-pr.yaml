@@ -1,37 +1,28 @@
-name: Socket native CLI PR
-
+name: Socket lockfile backend experiment
 on:
-  pull_request:
-    branches: [develop]
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
-    inputs:
-      run_develop_checks:
-        description: Run develop baseline and reachability checks before this PR is merged
-        type: boolean
-        default: false
-
 permissions:
   contents: read
-
-concurrency:
-  group: socket-native-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  native:
-    name: Native CLI verdict (optional)
-    if: ${{ !inputs.run_develop_checks }}
-    uses: ./.github/workflows/socket-scan.yaml
-    with:
-      mode: native
-      source_ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      source_branch: ${{ github.head_ref || github.ref_name }}
-    secrets:
-      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-  develop:
-    name: Manual develop validation
-    if: ${{ inputs.run_develop_checks }}
-    uses: ./.github/workflows/socket-develop-baseline.yaml
-    secrets:
-      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Install pinned Socket CLI
+        run: bash .github/scripts/install-socket-cli.sh
+      - name: Scan controlled manifest and lockfile combinations
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: python3 .github/scripts/lockfile_probe.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: socket-lockfile-probe
+          path: ${{ runner.temp }}/lockfile-probe
+          retention-days: 7
