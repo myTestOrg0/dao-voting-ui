@@ -1,10 +1,15 @@
-name: Socket native PR
+name: Socket PR native and policy comparison
 
-'on':
+on:
   pull_request:
     branches: [develop]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      run_develop_checks:
+        description: Run develop baseline and reachability checks before this PR is merged
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,46 +20,27 @@ concurrency:
 
 jobs:
   native:
-    name: Socket native findings (optional)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
-      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
-      SCAN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
-      SOCKET_FAIL_ON_FINDINGS: 'true'
-    steps:
-      - name: Set report directory
-        run: echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-native-report" >> "$GITHUB_ENV"
-      - name: Checkout candidate
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-      - name: Install hash-pinned Socket CLI
-        run: bash .github/scripts/install-socket-cli.sh
-      - name: Create Socket inventory scan
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: bash .github/scripts/socket-create-scan.sh
-      # No continue-on-error: the security check must actually be red.
-      # It remains non-blocking only because it is not a required GitHub check.
-      - name: Evaluate native resolutions and unresolved vulnerabilities
-        if: ${{ always() }}
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: python3 .github/scripts/socket-summary.py
-      - name: Upload report even when findings fail the check
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: socket-native-report
-          path: |
-            ${{ env.SOCKET_RESULTS_DIR }}/*.json
-            ${{ env.SOCKET_RESULTS_DIR }}/*.md
-          retention-days: 7
+    name: Native CLI verdict (optional)
+    if: ${{ !inputs.run_develop_checks }}
+    uses: ./.github/workflows/socket-scan.yaml
+    with:
+      mode: native
+      source_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      source_branch: ${{ github.head_ref || github.ref_name }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+  policy:
+    name: Server Block and Warn (optional)
+    if: ${{ !inputs.run_develop_checks }}
+    uses: ./.github/workflows/socket-scan.yaml
+    with:
+      source_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      source_branch: ${{ github.head_ref || github.ref_name }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+  develop:
+    name: Manual develop validation
+    if: ${{ inputs.run_develop_checks }}
+    uses: ./.github/workflows/socket-develop-baseline.yaml
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}

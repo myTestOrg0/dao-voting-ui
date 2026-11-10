@@ -1,218 +1,192 @@
-# Socket POC: рабочая интеграция
+# Socket POC
 
-## Что находится в PR
+## Поведение проверок
 
-12 изменённых файлов относительно develop. Исходный `.github/workflows/socket.yaml` не меняется.
+| Результат | Native CLI | Наша server-policy проверка | VEX проверка |
+|---|---|---|---|
+| Block | красный | красный | красный, если не снят применимым VEX |
+| Warn | зелёный с отчётом | красный | красный, если не снят применимым VEX |
+| Monitor | зелёный | зелёный с отчётом | зелёный с отчётом |
+| Ignore | зелёный | зелёный | VEX рассматривается независимо от native Resolutions |
+| Неполные данные / инфраструктурный сбой | штатный ненулевой CLI exit | код 2 | код 2 |
+
+Severity CVE и action политики — разные поля. Critical CVE с Monitor не делает нашу проверку красной.
+Коды нашей обвязки: 0 — нет Block/Warn; 1 — есть Block/Warn; 2 — проверка не завершена.
+Коды самого Socket CLI не имеют такого строгого разделения: его 1 может означать как policy Block, так и ошибку исполнения.
+
+Все jobs пока необязательны для merge. Их красный статус не запрещает merge, пока GitHub rulesets/required checks не требуют их прохождения.
+`continue-on-error` не используется. Исходный `.github/workflows/socket.yaml` не изменён.
+
+## Workflow и файлы
+
+- `socket-native-pr.yaml`: два независимых PR jobs для сравнения штатного CLI и нашей server-policy проверки.
+- `socket-vex-pr.yaml`: PR job с собственным VEX verdict.
+- `socket-develop-baseline.yaml`: обычный baseline develop и независимый reachability job.
+- `socket-scan.yaml`: общий reusable workflow. Установка, checkout, секрет и artifact объявлены один раз.
+
+Файл `socket-pr-test.yaml` переименован в `socket-develop-baseline.yaml`.
+Тонкие caller workflows задают ref, название ветки и режим; reusable workflow выполняет общие шаги.
+Четыре обычных Python-модуля заменили прежние скрипты с динамическими импортами:
 
 | Файл | Назначение |
 |---|---|
-| `.github/workflows/socket-native-pr.yaml` | Полный снимок PR, серверные действия и нативные Alert Resolutions Socket |
-| `.github/workflows/socket-vex-pr.yaml` | Полный снимок PR, затем собственный VEX-вердикт |
-| `.github/workflows/socket-pr-test.yaml` | Baseline настоящей develop; прежнее имя сохранено для ручного запуска до merge |
-| `.github/scripts/install-socket-cli.sh` | Проверка хешей и установка отдельного CLI без lifecycle scripts |
-| `.github/tools/socket-cli/dependencies.lock` | Зафиксированные Socket 1.13.1 и транзитивные зависимости с SHA-512 |
-| `.github/scripts/socket-create-scan.sh` | Создание scan, явный выбор PR/baseline, сохранение кода создания |
-| `.github/scripts/socket-summary.py` | Чтение серверных alert.action, список CVE в логе и Actions Summary, итоговый код |
-| `.github/scripts/socket-vex-fetch.py` | Получение центральных источников по разрешённым Git-репозиториям, фиксация SHA |
-| `.github/scripts/socket-vex-evaluate.py` | Сопоставление CVE/GHSA, точного npm PURL и статуса OpenVEX |
-| `.github/scripts/socket-vex-pipeline.py` | Применение VEX к результатам скана и финальный вердикт |
-| `.github/socket-vex-sources.json` | Идентификатор продукта, источники и их порядок |
-| Этот документ | Эксплуатация, границы решения и план проверок |
+| `.github/scripts/socket_scan.py` | Создание scan, API, VEX orchestration, проверка dashboard head и классификация ошибок |
+| `.github/scripts/socket_report.py` | Нормализация findings, Block/Warn verdict, Summary и лог |
+| `.github/scripts/socket_vex.py` | Точное сопоставление npm identity/CVE и выбор первого применимого statement |
+| `.github/scripts/socket_vex_sources.py` | Области применимости источников и чтение доверенных Git snapshots |
+| `.github/scripts/install-socket-cli.sh` | Установка CLI после проверки хешей |
+| `.github/tools/socket-cli/dependencies.lock` | Socket 1.13.1 и транзитивные зависимости с integrity hashes |
+| `.github/socket-vex-sources.json` | Собственный продукт, репозитории и refs VEX |
 
-Лаборатория, тесты, инструменты измерения, HTML-отчёт и исторические JSON сохранены в ветке
-[`codex/socket-poc-lab-archive`](https://github.com/myTestOrg0/dao-voting-ui/tree/codex/socket-poc-lab-archive),
-снимок `863415518ea0526288375c7aeb5085de8c91b782`.
-Локальная копия: соседняя папка `socket-poc-lab`. В рабочие сканы и PR эти материалы не входят.
-Fixtures приоритетов остаются в отдельном центральном репозитории
-[`vexel`](https://github.com/myTestOrg0/vexel/pull/1), в `poc/socket/fixtures`; рабочий загрузчик читает только `pkg`.
+## Нативный запуск
 
-## Full Scan, PR scan и reachability — разные понятия
-
-**Full Scan** — сохранённый результат анализа полного набора обнаруженных зависимостей конкретного снимка.
-Он включает прямые и транзитивные зависимости, восстановленные из поддерживаемых манифестов/lockfiles.
-Это не означает сборку приложения, анализ всего исходного кода или проверку содержимого Docker image.
-
-**PR scan** в GitHub App Socket — проверка изменений зависимостей в PR: новых пакетов/версий и связанных алертов.
-Отдельный project report может содержать полный снимок. Наличие baseline само по себе не переключает CLI на diff.
-
-**Наши PR workflows** создают Full Scan для head SHA PR и показывают все нерешённые находки снимка,
-включая существовавшие до PR. Сравнения base/head сейчас нет. Это выбранный пользователем режим.
-**Baseline** создаёт такой же manifest Full Scan, но для настоящей develop, и обновляет dashboard head.
-**`--reach`** добавляет локальный анализ исходников и зависимостей; это отдельная ось, а не синоним Full Scan.
-
-## Baseline develop
-
-Запуск: Actions → Socket develop baseline → Run workflow. До merge выбирать ветку `socket-pr-analysis`:
-workflow и скрипты берутся из неё, но сканируемые файлы — из отдельного checkout `develop`.
-После merge workflow запускается автоматически при push в develop; пока PR не merged, этот push-триггер ещё не активен.
-
-1. Checkout инструментов в `tooling`, настоящей develop в `candidate`, без сохранения GitHub credentials.
-2. Получение реального SHA через `git rev-parse HEAD` в `candidate`.
-3. Установка отдельного Socket CLI из проверенного lockfile в RUNNER_TEMP. Это не npm install приложения.
-4. Из `candidate` выполняется:
+Job Native CLI verdict запускает напрямую:
 
 ```sh
-socket scan create --org lido-labs --repo dao-voting-ui \
-  --branch develop --commit-hash "$SCAN_SHA" \
-  --default-branch --set-as-alerts-page --json .
+socket scan create --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
+  --branch "$SCAN_BRANCH" --commit-hash "$(git rev-parse HEAD)" \
+  --no-set-as-alerts-page --report --report-level warn --markdown .
 ```
 
-5. Серверные результаты читаются API и выводятся в лог/Summary, даже если обнаружены проблемы.
-6. API репозитория проверяет, что default_branch = develop и head_full_scan_id соответствует созданному scan.
-   `baseline-head.json` сохраняет доказательство. Для проверки нужен scope `repo:list`;
-   публикация scan и проверка head — отдельные операции, поэтому ошибка чтения metadata не доказывает провал публикации.
-7. Summary и JSON загружаются в artifact независимо от красного вердикта.
+Выход проходит через tee в файл; Bash pipefail сохраняет исходный ненулевой CLI verdict.
+Наш Python evaluator здесь не вызывается. Markdown штатного CLI добавляется в Summary без изменения verdict.
+Поэтому этот job должен быть зелёным при одних Warn, а соседний Server Block and Warn — красным.
+Оба проверяют весь снимок PR, каждый создаёт собственный scan. Это демонстрационное сравнение, а не рекомендуемое дублирование для каждого production PR.
+`--report-level warn` управляет отображением алертов, а не превращает Warn в Block.
+Native CLI может повторно применять правила по типу алерта и отличаться от серверного alert.action.
 
-Именно head default branch питает страницы Alerts/Dependencies. Их асинхронное обновление может отставать от создания scan.
-PR-флаг `--no-set-as-alerts-page` не даёт тестовым снимкам заменить этот baseline.
+## Baseline и reachability develop
 
-## Флаги наших команд
+Оба jobs сканируют отдельный настоящий checkout develop, а не содержимое тестового PR под меткой develop.
+Точный SHA читается внутри checkout и записывается в отчёт. Tooling находится в соседнем checkout и не попадает в scan target.
 
-| Аргумент | Зачем нужен |
-|---|---|
-| `scan create` | Подкоманда создания сохранённого снимка, не отдельный verdict/report |
-| `--org lido-labs` | Организация Socket; это не имя GitHub-организации |
-| `--repo dao-voting-ui` | Репозиторий в Socket, к которому привязывается scan |
-| `--branch NAME` | Метаданные ветки; флаг сам не делает git checkout |
-| `--commit-hash SHA` | Метаданные коммита; фактическое содержимое обеспечивает checkout |
-| `--json` | Машиночитаемый результат создания; сам не включает вывод всех CVE или проверку политики |
-| `.` | Позиционный TARGET: рекурсивное автообнаружение поддерживаемых манифестов/lockfiles в текущем каталоге с учётом игнорирования |
-| `--no-set-as-alerts-page` | PR: сохранить scan, не обновлять основной dashboard |
-| `--default-branch` | Baseline: назначить ветку scan default branch в Socket; не меняет default branch GitHub |
-| `--set-as-alerts-page` | Baseline: назначить scan для основного отчёта default branch |
+Обычный baseline использует `--default-branch --set-as-alerts-page` и проверяет через API,
+что `default_branch=develop` и `head_full_scan_id` совпадает с созданным scan.
+Для этой проверки нужен Socket token scope `repo:list`. Это чтение Socket metadata, не GitHub write.
+Baseline питает страницы Dependencies/Alerts. PR и reachability scans используют `--no-set-as-alerts-page` и не заменяют основной baseline.
 
-Обычный PR запускает ту же команду, но с head веткой/SHA и `--no-set-as-alerts-page` вместо двух baseline-флагов.
-Файлы `package.json` и `yarn.lock` не перечисляются вручную. Сборка/установка приложения не запускаются.
-
-### Нативный отчёт CLI: поддерживается, но в рабочей обвязке не используется
+Отдельный job Develop reachability with SCA fallback использует:
 
 ```sh
-socket scan create --org lido-labs --repo dao-voting-ui \
-  --branch "$SCAN_BRANCH" --commit-hash "$SCAN_SHA" \
-  --no-set-as-alerts-page --report --report-level warn .
+--reach --reach-version 15.14.1 --reach-disable-analytics \
+--reach-analysis-timeout 5m --reach-analysis-memory-limit 4GB \
+--reach-fallback-to-regular-scan
 ```
 
-- `--report`: дождаться результата и выполнить штатную проверку политики. Block (`error`) → ненулевой код; Warn → 0.
-- `--report-level warn`: включить Warning в вывод; это порог отображения, а не изменение exit code.
-- `--markdown`: альтернативный формат вывода; сам не публикует GitHub-комментарий.
-- `--pull-request NUMBER`: привязка метаданных PR; сам не создаёт diff и не выдаёт право комментировать.
-- `--auto-manifest`: запускает генерацию манифестов инструментами сборки для нужных экосистем; для нашего Yarn snapshot не требуется.
+Он независим от обычного baseline: нет needs, отмены другого job или публикации dashboard head.
+Это manifest inventory плюс локальный full application static analysis. Явного yarn build / Docker build в workflow нет.
+Engine может скачивать анализаторы и зависимости; для некоторых экосистем необходим build toolchain.
+CLI закреплён SHA-512 пакета и SHA-256 lockfile. `--reach-version` выбирает версию engine; это не отдельное закрепление engine по хешу.
 
-Socket умеет показывать алерты без нашей обвязки. Bare `scan create` проверяет создание scan,
-а не отсутствие проблем. Native `--report` проверяет Block, но не делает Warn красным.
-В проверенной версии 1.13.1 генератор native report также повторно применяет правила по типу алерта;
-это может отличаться от серверного `.action` с учётом reachability/Resolution.
-Наш evaluator читает серверные `.action`, а затем вводит дополнительное требование:
-нерешённая vulnerability с действием Warn или Monitor тоже даёт красный optional check.
-Ignore не делает native-вариант красным. Non-vulnerability Block/Warn также учитываются.
+При глобальном отказе reachability CLI пытается обычный SCA. Поле `reachabilityFallback` из JSON сохраняется в report.json.
+Успешный SCA fallback не доказывает, что full application reachability выполнен.
+Если fallback SCA находит Block/Warn, job всё равно красный; один Monitor оставляет его зелёным.
+Отказ Socket API этим флагом не устраняется. Чтение API повторяется до трёх раз при временных сетевых/5xx/429 ошибках;
+401/403 не повторяются. Неидемпотентное создание scan автоматически не повторяется.
 
-GitHub-права всех трёх workflow: только `contents: read`. Summary пишет runner через GITHUB_STEP_SUMMARY,
-artifact загружается Actions-механизмом; комментарии в PR не создаются.
-Красный check не запрещает merge, пока он не включён в required checks/rulesets.
-Слово optional в имени job само по себе ничего не настраивает.
+Summary нашей проверки разделён на три самостоятельных раздела:
 
-## Reachability: отдельный лабораторный режим
+1. Findings — счётчики, Block/Warn и отдельная сворачиваемая таблица Monitor.
+2. Reachability and fallback — не запрошен / запрошен без глобального fallback / переход на обычный SCA.
+3. Infrastructure and verification errors — отдельная причина и фаза отказа; код 2, а не утверждение об отсутствии CVE.
 
-Измерительный workflow и observer перенесены в архив. В трёх рабочих workflow нижеописанный режим сейчас не включён.
-Использовавшаяся команда дополняла create следующими флагами:
+Unknown/missing_support для отдельной CVE не равнозначны падению процесса. Персональная reachability metadata остаётся в findings.json.
+Успех создания scan сам по себе не означает отсутствие алертов или полное reachability coverage.
 
-| Флаг | Назначение |
-|---|---|
-| `--reach` | Локальный full application static reachability анализ кода приложения и зависимостей |
-| `--reach-version 15.14.1` | Выбор версии Coana engine отдельно от версии Socket CLI; версия сама по себе не является hash pin движка |
-| `--reach-disable-analytics` | Отключение дополнительной аналитики и связанных оптимизаций кеширования; не отключает отправку scan/facts |
-| `--reach-retain-facts-file` | Только измерение: оставить локальный facts-файл; observer затем удалял его, чтобы следующий обычный scan не использовал устаревшие facts |
+После merge baseline запускается при push в develop; также предусмотрен ручной запуск.
+До merge новый workflow-файл может отсутствовать в списке workflow default branch. Для проверки из ветки POC:
+Actions → Socket PR native and policy comparison → Run workflow → socket-pr-analysis → run_develop_checks=true.
+Этот ручной режим вызывает именно переименованный develop workflow, без PR jobs.
 
-Управление отказами, сейчас не включено:
+## Области применимости VEX
 
-| Флаг | Последствие |
-|---|---|
-| `--reach-analysis-timeout` | Предел анализа, по умолчанию 10m |
-| `--reach-analysis-memory-limit` | Предел памяти, по умолчанию 8GB |
-| `--reach-continue-on-analysis-errors` | Продолжить при ошибках анализа, с fallback на precomputed |
-| `--reach-continue-on-install-errors` | Продолжить при ошибках получения/установки зависимостей |
-| `--reach-continue-on-missing-lock-files` | Продолжить для соответствующих проектов без обязательного lockfile |
-| `--reach-continue-on-no-source-files` | Продолжить, когда исходники не найдены |
-| `--reach-fallback-to-regular-scan` | При провале reachability сделать обычный SCA scan; успешный fallback не доказывает успешный reachability |
+| Источник | Допустимые продукты | Приоритет |
+|---|---|---|
+| Собственный vexel | Manifest, приложение, Docker image, DHI image | 1 |
+| Docker DHI advisories | Только подтверждённые DHI images | 2 |
+| Aqua VEX Hub, используемый Trivy | Только Docker images в принятой нами модели | 3 |
 
-Ошибка анализатора, timeout/OOM или установки может остановить команду с ненулевым кодом,
-в том числе 1. В CLI 1.13.1 `output-create-new-scan` использует `result.code ?? 1` при `ok=false`.
-При этом `unknown`, `undeterminable` и `missing_support` в отдельных результатах не равнозначны провалу процесса:
-scan может завершиться успешно с частичным reachability coverage.
-Exit 1 от нашего evaluator при оставшихся CVE также не означает сбой анализатора.
-Нужно различать creation exit, завершённость анализа, coverage и финальный verdict.
+Это выбранная организационная политика источников. Сам Trivy умеет сканировать и другие типы targets;
+ограничение Aqua до images здесь является нашим правилом применимости.
+«Собственный VEX для всего» означает допустимость источника для любого типа продукта,
+а не глобальное исключение каждой CVE: должны совпасть продукт, пакет, версия и advisory.
 
-В эксперименте с Voting явного `yarn build`/Next build/Docker build не было.
-Engine анализировал локальный код, получал зависимости и формировал facts; CLI отправлял манифесты и сжатые facts,
-а не архив checkout. Измерено около 626413 байт трёх файлов-кандидатов загрузки; это не полный сетевой аудит.
-Facts являются производными данными анализа; отсутствие передачи исходников целиком не означает отсутствие метаданных кода.
+Приоритет применяется только после проверки области применимости.
+Текущие Socket jobs — manifest/application scans. Поэтому читается собственный источник;
+Docker DHI и Aqua отмечаются как ineligible и не скачиваются. Для full application --reach это тоже не image scan.
+Изменить один env-флаг недостаточно, чтобы подтвердить DHI image: будущему image gate нужны digest, архитектура и проверенное происхождение.
+Текущий matcher поддерживает точные npm PURL. Общая обработка OS packages и image-product identities ещё не реализована.
 
-## VEX и план проверки приоритетов
+Для одной package/version/CVE первое подходящее statement побеждает.
+not_affected/fixed снимает finding; affected/under_investigation сохраняет исходное действие и останавливает нижние исключения.
+В частности, Monitor + affected остаётся Monitor и даёт 0: VEX сам не повышает action до Warn.
+В VEX-варианте server Ignore для vulnerability сначала восстанавливается до Monitor,
+чтобы native Resolutions не становились неявным вторым механизмом исключений.
+VEX меняет наш Actions verdict; dashboard Socket не переписывается.
 
-Рабочий порядок: **own → Docker DHI → Aqua VEX Hub**, первое применимое statement для конкретной package/version/CVE.
-Сначала проверяется идентичность продукта и применимость источника, затем приоритет.
-`not_affected`/`fixed` снимают конкретную находку; `affected`/`under_investigation` сохраняют её и останавливают нижние источники.
-Разные CVE и версии оцениваются независимо. Ошибочный/противоречивый документ не должен давать зелёный результат.
+## Что найдено в lidofinance actions
 
-Native и VEX — независимые варианты сравнения: native соблюдает серверные Resolutions;
-VEX восстанавливает проигнорированные сервером vulnerability findings до Monitor и применяет центральные исключения.
-Поэтому серверный Ignore в VEX-варианте сам по себе недостаточен для исключения.
-У этого подхода есть граница: нельзя восстановить находку, которую сервер вообще не вернул.
-VEX влияет на наш финальный Actions exit code/Summary, но не меняет алерты в Socket dashboard.
+Изучены main `1d7a6d8cc9512545dfdda0be7e697a11e7292241` и
+[PR 28](https://github.com/lidofinance/actions/pull/28), commit `88e2c5058d81edbf239a37a7f45f474f3c579bce`.
+На main Trivy/VEX пока нет. В PR 28:
 
-**Текущее ограничение:** скан npm-манифестов не доказывает использование конкретного DHI image.
-DHI загружается для provenance, но не может снимать находки такого скана. Aqua в проверенном снимке не содержал npm-данных.
-Fixtures с названиями Docker/Aqua проверяют роли приоритета, а не подлинные решения этих поставщиков.
+- reusable k8s-build-push-harbor workflow собирает локальный Docker image до логина в Harbor;
+- Trivy 0.62.1 запущен Docker-образом, закреплённым digest;
+- `vex repo download` загружает репозитории из доверенного repository.yaml;
+- `trivy image --vex repo --skip-vex-repo-update --show-suppressed --format json --exit-code 0` формирует отчёт;
+- отдельный Python helper считает findings после VEX; dev report-only, staging/prod/critical блокируются по HIGH/CRITICAL;
+- JSON envelope проверяется, чтобы отсутствие полноценного результата не считалось чистым scan;
+- источники Aqua и DHI включены, внутренний lidofinance/vex-db пока disabled;
+- dhi_policy.py отдельно загружает policy/dhi-exceptions.json — это исключения из требования DHI base images, не CVE VEX.
 
-### Этап 1: детерминированный тест evaluator
+Для нашего PR перенят стиль: тонкие YAML callers, reusable execution, обычные stdlib Python-модули, SHA pins,
+сканирование отдельно от policy verdict. Штатный Trivy resolver не является библиотекой для Socket findings,
+поэтому Trivy-specific helper не копируется и не импортируется. Его repository.yaml также не доказывает нужный нам порядок own → DHI → Aqua.
+Для image/release интеграции целесообразно переиспользовать сам Trivy image gate после согласования PR 28.
 
-Использовать отдельный synthetic product из `vexel/poc/socket`; фиксировать SHA всех источников.
-Восемь центральных cases уже выполнялись успешно в архивном PR workflow.
+## Организационные Rulesets
 
-| Сценарий | Победитель / ожидаемое состояние целевой находки |
-|---|---|
-| Own affected, Docker not_affected | Own, находка остаётся |
-| Own not_affected, Docker affected | Own, находка исключается |
-| Own про другую CVE, Docker not_affected | Docker |
-| Own и Docker про другие CVE, Aqua not_affected | Aqua |
-| Own under_investigation, Docker not_affected | Own, находка остаётся |
-| Другая версия | Исключение не применяется |
-| Истёкший own без других statements | Исключение не применяется |
-| Нет VEX | Исходная находка остаётся |
+Схема без Socket GitHub App:
 
-Дополнить: другой product/image digest/архитектура, CVE↔GHSA alias, конфликт статусов одного источника,
-невалидный JSON/статус, недоступный источник, отзыв statement, обновление версии документа.
-Проверять не только exit code, но выбранный source, status, document ID, SHA и original/effective action.
-При неполной проверке итог красный с отдельным `verification_incomplete`, а не «уязвимостей нет».
+1. Поместить доверенный trigger workflow и helper/action в центральный репозиторий организации.
+2. Добавить pull_request; при merge queue — также merge_group. Один workflow_call без PR trigger недостаточен для ruleset workflow.
+3. Брать tooling из доверенного центрального ref; отдельно checkout целевого PR. Обычный checkout в caller context получает caller repo, а не автоматически центральные scripts.
+4. Раздать Socket API token через organization secret с доступом только к выбранным репозиториям; contents:read достаточно для наших операций.
+   Fork PR обычно не получает secrets — этот случай требует отдельной политики. Не запускать untrusted PR code с секретами через pull_request_target ради обхода ограничения.
+5. Org Settings → Repository → Rulesets → New branch ruleset; выбрать репозитории и целевые ветки.
+6. При доступности правила Require workflows to pass before merging выбрать центральный workflow/ref.
+   Для неблокирующего rollout использовать Evaluate; Active делает красный job обязательным gate.
+7. Если required workflows недоступны на плане, использовать thin caller в каждом repo и org rule Require status checks с точным именем job.
+   Одно требование status check не устанавливает workflow автоматически.
 
-### Этап 2: сквозной тест Socket → VEX → Actions
+Ruleset сам не сканирует и не выдаёт secret. Фильтры branches/paths/types у ruleset workflows игнорируются:
+реальную область действия задаёт ruleset. Для такого централизованного workflow нужно убрать cancel-in-progress concurrency.
+Нынешний PR — локальный POC caller, не готовая публикация в lidofinance/actions. Rulesets в организациях не менялись.
 
-1. Взять реальный scan и конкретную finding, не менять baseline между контрольными вычислениями.
-2. Выполнить no-VEX / own under_investigation / own not_affected / отзыв own на изолированном тестовом продукте.
-3. Подтвердить, что меняется только выбранная package/version/CVE; соседние CVE/версии остаются.
-4. Для перехода job 1→0 использовать изолированный набор с одной находкой.
-   При полном Voting snapshot одно исключение не сделает job зелёным: остаются другие CVE.
-5. Положительные Docker/Aqua live cases проверять отдельно на подходящем image digest и экосистеме.
-   До добавления image-context matching такие тесты не считаются реализованными.
-6. Сохранить scan ID, commit, SHA источников, решение и screenshot Summary в лаборатории/архиве.
+[GitHub required workflows](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
+[troubleshooting](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules).
 
-Источники:
-[Socket scan](https://docs.socket.dev/docs/socket-scan),
-[PR scanning](https://docs.socket.dev/docs/socket-for-github-pull-request-scanning),
-[Full application reachability](https://docs.socket.dev/docs/full-application-reachability),
-[Reachability results](https://docs.socket.dev/docs/reachability-results).
+## Что означают генерация манифестов и shallow rescan
 
-## Последняя сквозная проверка
+Генерация манифестов нужна, когда зависимости определяются исполняемой логикой build tool.
+Например, Gradle build.gradle выбирает зависимости в зависимости от plugins, profiles и subprojects.
+Socket запускает локальный build tool для разрешения графа и записывает результат в Socket facts / поддерживаемый манифест.
+Этот результат затем анализируется обычным scan. Это не обязательно production build и не full application reachability.
+Для Voting с package.json + yarn.lock такой генератор в текущем POC не требуется.
 
-Очистка: commit `270f240`; в PR 12 файлов. Baseline
-[run 42512531182](https://github.com/myTestOrg0/dao-voting-ui/actions/runs/42512531182)
-создал scan `bf3cb00a-e5d2-47a3-81e9-96c69e0a5dc3` из develop
-`79f467601f20f9e6cf300ffbc312c1fa6d493ee1`: 1433 компонента, 217 vulnerability findings
-(53 Warn, 164 Monitor). По severity: 5 Critical, 103 High, 89 Medium, 20 Low.
-Это находки package/version/advisory, не число уникальных CVE организации.
-Server policy exit = 0; дополнительный advisory verdict = 1.
+Shallow rescan не читает свежую ветку GitHub и не заново собирает приложение.
+Пример: вчера сохранён scan S с lodash 4.17.11; сегодня изменена политика Warn → Monitor.
+Shallow rescan создаёт новый scan на основе прежнего разрешённого графа и применяет актуальную политику.
+Если в репозитории lodash уже обновлён до другой версии, shallow rescan S этого не обнаружит:
+для нового состояния нужно загрузить новые manifests. Deep rescan повторяет разрешение зависимостей исходного scan;
+он также не равен checkout последнего коммита GitHub.
 
-Публикация scan успешна; API-проверка dashboard head получила 403 из-за отсутствия доступа `repo:list`.
-Поэтому переключение страниц Alerts/Dependencies пока не подтверждено чтением metadata.
-Оба PR workflow завершили проверку: native run 42512522225, VEX run 42512522257;
-в VEX verification_complete=true и 217 нерешённых findings. PR остаётся MERGEABLE при красных checks.
+[Generated manifests](https://docs.socket.dev/docs/socket-manifest), [Rescan API](https://docs.socket.dev/reference/rescanorgfullscan).
+
+## Проверки и история
+
+Текущие контрактные тесты находятся отдельно в socket-poc-lab/.github/scripts/test_socket_current.py:
+24 теста, включая восемь центральных priority cases, Monitor-green, fallback, API retries, ошибки и VEX scopes.
+Artifacts: report.json, findings.json, scan-artifacts.json, summary.md; для VEX — provenance, для baseline — проверка head.
+Исторические результаты 09.11.2026 с красным Monitor сохранены как история старой политики;
+текущая политика определяется этим документом и новым кодом. Последние Actions run links фиксируются в описании PR.

@@ -1,0 +1,37 @@
+name: Socket develop baseline
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      SOCKET_SECURITY_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: socket-develop-baseline
+  cancel-in-progress: false
+
+jobs:
+  baseline:
+    name: Develop dashboard baseline
+    uses: ./.github/workflows/socket-scan.yaml
+    with:
+      source_ref: ${{ github.event_name == 'push' && github.sha || 'develop' }}
+      source_branch: develop
+      publish_baseline: true
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+  reachability:
+    name: Develop reachability with SCA fallback (optional)
+    uses: ./.github/workflows/socket-scan.yaml
+    with:
+      source_ref: ${{ github.event_name == 'push' && github.sha || 'develop' }}
+      source_branch: develop
+      reach: true
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}

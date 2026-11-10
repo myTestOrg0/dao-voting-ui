@@ -1,10 +1,4 @@
-"""POC OpenVEX overlay for npm findings. Sources are ordered highest priority first.
-
-Used only by the VEX PR variant. Inputs must come from a trusted central source,
-not unreviewed PR content. This adapter supports exact npm PURLs, not all OpenVEX
-product/identity variants or generic organizational risk acceptances.
-"""
-import argparse
+"""Match exact npm identities and choose the first applicable OpenVEX statement."""
 import copy
 import hashlib
 import json
@@ -45,7 +39,10 @@ def parse_time(value):
 
 
 def load_source(name, path, now):
-    raw = Path(path).read_bytes()
+    return parse_source(name, Path(path).read_bytes(), now)
+
+
+def parse_source(name, raw, now):
     document = json.loads(raw)
     if document.get('@context') != 'https://openvex.dev/ns/v0.2.0':
         raise ValueError('Unsupported OpenVEX context')
@@ -113,31 +110,4 @@ def evaluate(findings, sources, product_id):
                 finding['action'] = 'ignore'
             # affected/under_investigation stop lower-priority suppressions.
             break
-    if any(f['action'] not in ('error', 'warn', 'monitor', 'ignore') for f in effective):
-        code = 2
-    else:
-        code = int(any(f['action'] == 'error' for f in effective))
-    return {'exit_code': code, 'findings': effective,
-            'sources': [{k: s[k] for k in ('name', 'sha256', 'document_id', 'expired')} for s in sources]}
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--findings', required=True)
-    parser.add_argument('--product-id', required=True)
-    parser.add_argument('--source', action='append', default=[], help='NAME=PATH, highest priority first')
-    parser.add_argument('--output', required=True)
-    args = parser.parse_args()
-    try:
-        now = datetime.now(timezone.utc)
-        sources = [load_source(*item.split('=', 1), now) for item in args.source]
-        result = evaluate(json.loads(Path(args.findings).read_text()), sources, args.product_id)
-    except (ValueError, KeyError, OSError, TypeError) as error:
-        result = {'exit_code': 2, 'verification_complete': False, 'error': str(error)}
-    Path(args.output).write_text(json.dumps(result, indent=2))
-    print(f"VEX POC effective exit code: {result['exit_code']}")
-    return result['exit_code']
-
-
-if __name__ == '__main__':
-    raise SystemExit(main())
+    return effective
