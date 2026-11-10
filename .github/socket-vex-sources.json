@@ -1,5 +1,4 @@
 {
-  "product_id": "urn:mytestorg0:dao-voting-ui",
   "sources": [
     {"name": "own", "repository": "myTestOrg0/vexel", "ref": "codex/socket-poc-integrations"},
     {"name": "docker-dhi", "repository": "docker-hardened-images/advisories", "ref": "main"},

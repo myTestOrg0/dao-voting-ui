@@ -4,9 +4,10 @@ import copy
 import hashlib
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 STATUSES = {"affected", "not_affected", "fixed", "under_investigation"}
 JUSTIFICATIONS = {
@@ -87,7 +88,9 @@ def matching_statement(source, finding, product_id):
         applicable = False
         for product in statement.get("products") or []:
             top = product.get("@id")
-            if npm_identity(top) == identity:
+            # Our exceptions must name the application repository explicitly.
+            # Vendor package statements are considered only after image-scope checks.
+            if source["name"] != "own" and npm_identity(top) == identity:
                 applicable = True
             if top == product_id:
                 applicable |= any(
@@ -135,13 +138,52 @@ def evaluate(findings, sources, product_id):
                 "statement_id": statement.get("@id"),
                 "evidence_url": statement.get("evidence_url"),
                 "status_notes": statement.get("status_notes"),
+                "statement": copy.deepcopy(statement),
                 "reason": statement.get("impact_statement")
                 or statement.get("justification")
                 or statement.get("action_statement")
-                or "Fixed in this product version",
+                or statement.get("status_notes")
+                or statement["status"].replace("_", " "),
             }
             if statement["status"] in ("not_affected", "fixed"):
                 finding["action"] = "ignore"
             # affected/under_investigation stop lower-priority suppressions.
             break
     return effective
+
+
+def effective_document(findings, product_id):
+    """One resolved statement per finding, scoped only to this application repository."""
+    statements = []
+    for finding in findings:
+        decision = finding.get("vex")
+        if decision is None:
+            continue
+        statement = copy.deepcopy(decision["statement"])
+        statement.pop("evidence_url", None)
+        statement.pop("@id", None)
+        package = quote(finding["package"], safe="/")
+        version = quote(finding["version"], safe="")
+        statement["products"] = [
+            {
+                "@id": product_id,
+                "subcomponents": [{"@id": f"pkg:npm/{package}@{version}"}],
+            }
+        ]
+        evidence = decision.get("evidence_url") or decision["document_id"]
+        notes = statement.get("status_notes", "")
+        statement["status_notes"] = (
+            f"{notes}\nSelected source: {decision['source']}; evidence: {evidence}".strip()
+        )
+        if statement not in statements:
+            statements.append(statement)
+    if not statements:
+        return None
+    return {
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "@id": f"urn:uuid:{uuid.uuid4()}",
+        "author": "myTestOrg0 VEX resolver",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": 1,
+        "statements": statements,
+    }

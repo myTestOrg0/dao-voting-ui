@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from wrapped_vex import evaluate
+from wrapped_vex import effective_document, evaluate
 from wrapped_vex_sources import load_sources
 
 ACTION_RANK = {"error": 0, "warn": 1, "monitor": 2, "ignore": 3, "unknown": 4}
@@ -141,7 +141,7 @@ def render(report, rows):
         "",
         "### Findings",
         "",
-        "Monitor findings are reported but do not fail this check.",
+        "Only Block and Warn findings are listed. Full results remain in the JSON artifacts.",
         "",
         "| Components | Block | Warn | Monitor | Ignore |",
         "|---:|---:|---:|---:|---:|",
@@ -161,20 +161,16 @@ def render(report, rows):
         ]
     if report.get("dashboard_note"):
         lines += [md(report["dashboard_note"]), ""]
-    for title, actions in [
-        ("Block and Warn", {"error", "warn"}),
-        ("Monitor (non-blocking)", {"monitor"}),
-    ]:
-        selected = [row for row in rows if row["action"] in actions]
-        if selected:
-            lines += [
-                f"<details><summary>{title}: {len(selected)}</summary>",
-                "",
-                table(selected),
-                "",
-                "</details>",
-                "",
-            ]
+    selected = [row for row in rows if row["action"] in ("error", "warn")]
+    if selected:
+        lines += [
+            f"<details><summary>Block and Warn: {len(selected)}</summary>",
+            "",
+            table(selected),
+            "",
+            "</details>",
+            "",
+        ]
     lines += ["### Reachability and fallback", ""]
     if report.get("fallback"):
         lines += [
@@ -228,7 +224,7 @@ def save(folder, report, rows):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
             stream.write(content)
     for row in rows:
-        if row["action"] != "ignore":
+        if row["action"] in ("error", "warn"):
             print(
                 "FINDING | "
                 + " | ".join(
@@ -293,13 +289,21 @@ def verify_baseline(folder, report):
 def apply_vex(folder, rows, target):
     config_file = Path(__file__).parents[1] / "socket-vex-sources.json"
     config = json.loads(config_file.read_text())
+    repository = os.environ["GITHUB_REPOSITORY"]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ValueError("Expected the exact GitHub owner/repository identity")
+    # Derive scope from the running repository, never a copied config's product_id.
+    product_id = f"https://github.com/{repository}"
     # Keep this central VEX comparison independent from native Socket resolutions.
     for row in rows:
         if row["vulnerability"] and row["action"] == "ignore":
             row["server_action_before_vex"] = "ignore"
             row["action"] = "monitor"
     sources = load_sources(config, rows, target)
-    effective = evaluate(rows, sources, config["product_id"])
+    effective = evaluate(rows, sources, product_id)
+    document = effective_document(effective, product_id)
+    if document is not None:
+        (folder / "effective-vex.json").write_text(json.dumps(document, indent=2))
     provenance = []
     for source in sources:
         entry = source.copy()
