@@ -26,8 +26,8 @@ Severity CVE и action политики — разные поля. Critical CVE 
 |---|---|
 | `native-pr-socket.yaml` | Native Node comparison case: автоматический PR scan, Summary и PR-комментарий через gh |
 | `native-python-pr-socket.yaml` | Native Python test case: встроенный PR-комментарий, --disable-ignore и full snapshot через пустой control baseline |
-| `wrapped-pr-socket.yaml` | Ручной test case через workflow_dispatch: серверная policy и нативные исключения Socket; VEX не загружается |
-| `wrapped-pr-socket-vex.yaml` | Ручной test case через workflow_dispatch: наша обработка центрального VEX |
+| `wrapped-pr-socket.yaml` | Автоматический PR test case: серверная policy и нативные исключения Socket; VEX не загружается |
+| `wrapped-pr-socket-vex.yaml` | Автоматический PR test case: наша обработка центрального VEX |
 | `wrapped-baseline-socket.yaml` | Push develop и ручной запуск: reachability с fallback, публикация baseline |
 | `.github/scripts/wrapped_report.py` | Разбор скачанного JSON, таблицы Summary и итоговый exit code |
 | `.github/scripts/wrapped_vex.py` | Сопоставление продукта/версии/CVE и выбор VEX statement |
@@ -471,7 +471,7 @@ CLI запущен как socket scan report --report-level warn --license --jso
 
 ## Текущий native PR mode и комментарии
 
-Автоматически на pull_request запускаются два native test cases: Node и Python. Оба wrapped workflow сохранены как ручные test cases.
+Автоматически на pull_request запускаются четыре независимых test cases: native Node, native Python, wrapped server policy и wrapped VEX. Каждый также доступен через workflow_dispatch. Добавление native Python не заменяет остальные сценарии.
 Native использует один checkout точного PR head SHA, inline установку hash-pinned Node CLI 1.13.1 и прямую команду scan create --report.
 Node CLI сам формирует Markdown и process exit; Python scripts в этом workflow не вызываются.
 Warn показываются и не делают native policy verdict красным; Monitor не перечисляются.
