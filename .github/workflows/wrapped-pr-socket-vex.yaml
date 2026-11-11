@@ -2,7 +2,6 @@ name: Wrapped PR Socket VEX
 
 on:
   pull_request:
-    branches: [develop]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -15,6 +14,7 @@ concurrency:
 
 jobs:
   scan:
+    if: github.event_name != 'pull_request' || github.base_ref == github.event.repository.default_branch
     name: Central VEX exceptions (optional)
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -28,7 +28,7 @@ Severity CVE и action политики — разные поля. Critical CVE 
 | `native-python-pr-socket.yaml` | Native Python test case: встроенный PR-комментарий, --disable-ignore и full snapshot через пустой control baseline |
 | `wrapped-pr-socket.yaml` | Автоматический PR test case: серверная policy и нативные исключения Socket; VEX не загружается |
 | `wrapped-pr-socket-vex.yaml` | Автоматический PR test case: наша обработка центрального VEX |
-| `wrapped-baseline-socket.yaml` | Push develop и ручной запуск: reachability с fallback, публикация baseline |
+| `wrapped-baseline-socket.yaml` | Push в default branch и ручной запуск: reachability с fallback, публикация baseline |
 | `.github/scripts/wrapped_report.py` | Разбор скачанного JSON, таблицы Summary и итоговый exit code |
 | `.github/scripts/wrapped_vex.py` | Сопоставление продукта/версии/CVE и выбор VEX statement |
 | `.github/scripts/wrapped_vex_sources.py` | Чтение уже скачанных VEX JSON; без сети и запуска Git |
@@ -36,7 +36,11 @@ Severity CVE и action политики — разные поля. Critical CVE 
 | `.github/socket-vex-sources.json` | Идентификатор продукта, источники и refs VEX |
 
 Префиксы `native` / `wrapped` отличают штатный verdict от нашей логики.
-`pr` означает pull_request; `baseline` — push в develop. Все пять workflow допускают ручной запуск.
+`pr` означает pull_request в default branch; `baseline` — push в default branch. Все пять workflow допускают ручной запуск.
+Ветка берётся из github.event.repository.default_branch (сейчас develop), а не из литерала в YAML.
+У on.branches нет динамического expression: PR/push events фильтруются условием job.
+Baseline push trigger принимает только branches, исключая tags. На остальных ветках job пропускается.
+PR scan по-прежнему проверяет head исходной ветки PR; имя default branch нельзя подставлять вместо имени проверяемой feature-ветки.
 Исходный socket.yaml сохранён без изменений.
 
 Установка — обычные Bash-команды: sha256sum проверяет lockfile, jq извлекает package.json,
@@ -66,18 +70,18 @@ socket scan create --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
 `--report-level warn` управляет отображением алертов, а не превращает Warn в Block.
 Native CLI может повторно применять правила по типу алерта и отличаться от серверного alert.action.
 
-## Один develop scan с reachability и fallback
+## Один default-branch scan с reachability и fallback
 
-Для develop выполняется ровно один job: `--reach --reach-fallback-to-regular-scan`.
+Для default branch выполняется ровно один job: `--reach --reach-fallback-to-regular-scan`.
 Отдельный manifest-only baseline job удалён. Baseline означает роль результата как основного отчёта dashboard,
 а reachability — способ анализа; это совместимые свойства одного scan, не два запуска.
 
-Job сканирует отдельный настоящий checkout develop. Точный SHA читается внутри checkout.
+Job сканирует отдельный настоящий checkout default branch. Точный SHA читается внутри checkout.
 Tooling находится в соседнем checkout и не попадает в scan target.
 В одном вызове CLI используются:
 
 ```sh
---branch develop --default-branch --set-as-alerts-page \
+--branch "$SCAN_BRANCH" --default-branch --set-as-alerts-page \
 --reach --reach-version 15.14.1 --reach-disable-analytics \
 --reach-analysis-timeout 5m --reach-analysis-memory-limit 4GB \
 --reach-fallback-to-regular-scan
@@ -89,7 +93,11 @@ Repository API `head_full_scan_id` отражает legacy `socket` head. Поэ
 Активный typed head этим API не подтверждается: это явно записывается в Summary и baseline-head.json как matches=null,
 а не выдаётся за успешное сравнение. Несовпадение ID разных scan types само по себе не считается инфраструктурной ошибкой.
 Для этого нужен Socket `repo:list`: чтение metadata, не GitHub write.
-PR scans сохраняют `--no-set-as-alerts-page`, чтобы не заменять основной отчёт develop.
+PR scans сохраняют `--no-set-as-alerts-page`. По документации Node этот флаг (как и положительный
+--set-as-alerts-page) управляет основным отчётом только для Socket default branch;
+для обычной feature-ветки --set-as-alerts-page игнорируется. Это не переключатель видимости PR findings.
+Находки PR доступны в scan report по scan ID/URL, PR comment, Actions Summary и artifacts.
+Нельзя маркировать snapshot feature-ветки именем default branch или менять Socket default branch ради видимости PR.
 
 В workflow нет явного yarn build / Docker build. Engine может скачивать анализаторы и зависимости;
 для некоторых экосистем нужен build toolchain. CLI закреплён хешами; версия engine 15.14.1 выбрана отдельно.
@@ -102,7 +110,8 @@ Summary имеет отдельные разделы Findings, Reachability and 
 Если настройка runner/установка CLI не завершились, workflow сохраняет сообщение о неполной проверке.
 Unknown/missing_support отдельной CVE не равнозначны глобальному падению процесса.
 
-После merge wrapped-baseline-socket.yaml запускается при push в develop и через Run workflow.
+После merge wrapped-baseline-socket.yaml запускает scan при push в default branch и через Run workflow.
+При ручном запуске scan target всегда default branch; tooling берётся из выбранного workflow ref.
 До merge новый filename может быть недоступен для workflow_dispatch; контрольный запуск проводят в отдельной lab-ветке через уже зарегистрированный workflow, без добавления proxy в native PR workflow.
 
 Без `--reach` это не только сравнение версий с CVE-базой: Socket также использует сведения о malware,
@@ -570,29 +579,42 @@ override через vars.SOCKET_REPO удалён. В native-python нет ру�
 1. Checkout точного PR head с полной историей.
 2. Установка проверенного CLI.
 3. Native API-mode scan синтетического package.json без dependencies во временной папке runner.
-   Его отдельная branch native-python-control-<run_id> не является develop и не меняет dashboard baseline.
+   Его отдельная branch native-python-control-<run_id> не является default branch и не меняет dashboard baseline.
 4. Native SCM comparison настоящего snapshot PR с этим контрольным пустым scan.
 5. Сам Python CLI создаёт или обновляет свой security PR comment. Summary/JSON сохраняются как artifacts.
 
 Пустой control baseline выбран намеренно: POC проверяет весь snapshot, а SCM-комментарий Python CLI 2.11.13
 строится из new_alerts. --strict-blocking расширяет gate/JSON на unchanged, но сам по себе не включает их в native SCM comment.
 С контрольным baseline реальные находки snapshot попадают в new_alerts и видны в PR.
-Это не обычный diff с develop; для production net-new проверки control baseline нужно заменить реальным base scan.
+Это не обычный diff с default branch; для production net-new проверки control baseline нужно заменить реальным base scan.
 
 API-mode и --pr-number 0 используются только для пустого control scan: Python CLI не должен
 публиковать для него отдельный PR comment. Явный 0 отключает автоопределение PR из CI environment.
 Реальный snapshot сканируется отдельной командой --scm github с настоящим номером PR и security comment.
 --no-set-as-alerts-page в Node PR workflow не отключает findings, отчёты или PR comments:
-он запрещает заменять основной dashboard snapshot develop результатом незамерженного PR.
+он запрещает обновлять основной dashboard snapshot, если scan относится к Socket default branch.
+Для обычной feature-ветки положительный --set-as-alerts-page сам по себе также не обновляет основной dashboard.
 Не следует считать, что основной Alerts dashboard агрегирует все PR scans.
 
 Для Python scan token рекомендуются full-scans:create/list, diff-scans:create/list и repo:list.
+repo:list нужен штатному выбору baseline для чтения metadata Socket repository (default_branch/head_full_scan_id).
+Текущий POC с явным --base-scan-id обходит этот выбор; repo:list не является обязательным для любого scan.
+alert-resolution:read/list читают отдельные записи исключений; full-scans:list читает scan с уже применёнными server actions.
 alert-resolution:list/read и security-policy:read/license-policy:read не нужны текущему Python пути;
 Node report по-прежнему отдельно читает security policy. repo:create нужен только для автоматического
 создания нового Socket repository; существующие репозитории можно provision отдельно.
 Минимальный набор scopes ещё не проверен отдельным урезанным токеном.
 20 минут — наш общий timeout job, а не лимит Socket: по истечении GitHub останавливает runner,
 успешного завершения проверки при этом нет; серверный scan уже мог быть создан и продолжить обработку.
+
+Python CLI также умеет одиночный full scan без control baseline: например, --scm github в обычном push pipeline
+без PR context вызывает full scan. API mode вне Git checkout без --enable-diff также создаёт full scan.
+Сам --scm api не гарантирует full mode: внутри Git checkout выбор зависит от changed files и diff flags.
+--enable-json запрашивает findings full scan, а не только scan URL. Это один upload реального проекта.
+В 2.11.13 успешный full scan без comparison автоматически отключает blocking по findings и этот путь не публикует
+встроенный GitHub security comment. Текущий PR workflow на этот режим не переключён.
+В обычном PR diff mode также загружаются все обнаруженные manifests; diff описывает сравнение результатов,
+а не загрузку только изменённых строк. С существующим baseline нужен один новый scan PR, не два.
 
 Основные параметры:
 
