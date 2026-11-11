@@ -24,7 +24,7 @@ jobs:
         shell: bash
     env:
       SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
-      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
+      SOCKET_REPO: ${{ github.event.repository.name }}
       SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
       SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:

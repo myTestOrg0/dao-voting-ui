@@ -23,7 +23,7 @@ jobs:
         shell: bash
     env:
       SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
-      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
+      SOCKET_REPO: ${{ github.event.repository.name }}
       SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
       SOCKET_MODE: vex
     steps:

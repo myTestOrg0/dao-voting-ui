@@ -560,6 +560,11 @@ CLI и 19 dependencies закреплены версиями и SHA-256 в socke
 pip использует --require-hashes --only-binary=:all:. Lock рассчитан на CPython 3.12 / Linux x86_64.
 Новых Python helper scripts в application PR не добавлено: команды видны в YAML.
 
+Socket repository name во всех POC workflow берётся из github.event.repository.name;
+override через vars.SOCKET_REPO удалён. В native-python нет ручных inputs:
+при pull_request номер приходит из event, при workflow_dispatch CLI gh находит PR выбранной ветки.
+Для ручного запуска выбирайте ветку существующего PR; ошибка поиска останавливает шаг сканирования.
+
 Последовательность:
 
 1. Checkout точного PR head с полной историей.
@@ -573,6 +578,21 @@ pip использует --require-hashes --only-binary=:all:. Lock рассчи
 строится из new_alerts. --strict-blocking расширяет gate/JSON на unchanged, но сам по себе не включает их в native SCM comment.
 С контрольным baseline реальные находки snapshot попадают в new_alerts и видны в PR.
 Это не обычный diff с develop; для production net-new проверки control baseline нужно заменить реальным base scan.
+
+API-mode и --pr-number 0 используются только для пустого control scan: Python CLI не должен
+публиковать для него отдельный PR comment. Явный 0 отключает автоопределение PR из CI environment.
+Реальный snapshot сканируется отдельной командой --scm github с настоящим номером PR и security comment.
+--no-set-as-alerts-page в Node PR workflow не отключает findings, отчёты или PR comments:
+он запрещает заменять основной dashboard snapshot develop результатом незамерженного PR.
+Не следует считать, что основной Alerts dashboard агрегирует все PR scans.
+
+Для Python scan token рекомендуются full-scans:create/list, diff-scans:create/list и repo:list.
+alert-resolution:list/read и security-policy:read/license-policy:read не нужны текущему Python пути;
+Node report по-прежнему отдельно читает security policy. repo:create нужен только для автоматического
+создания нового Socket repository; существующие репозитории можно provision отдельно.
+Минимальный набор scopes ещё не проверен отдельным урезанным токеном.
+20 минут — наш общий timeout job, а не лимит Socket: по истечении GitHub останавливает runner,
+успешного завершения проверки при этом нет; серверный scan уже мог быть создан и продолжить обработку.
 
 Основные параметры:
 

@@ -21,7 +21,7 @@ jobs:
         shell: bash
     env:
       SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
-      SOCKET_REPO: ${{ vars.SOCKET_REPO || github.event.repository.name }}
+      SOCKET_REPO: ${{ github.event.repository.name }}
       SCAN_BRANCH: develop
       SOCKET_MODE: policy
       SOCKET_REACH: 'true'
