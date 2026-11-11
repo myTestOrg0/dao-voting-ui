@@ -604,7 +604,7 @@ alert-resolution:list/read и security-policy:read/license-policy:read не ну
 Node report по-прежнему отдельно читает security policy. repo:create нужен только для автоматического
 создания нового Socket repository; существующие репозитории можно provision отдельно.
 Минимальный набор scopes ещё не проверен отдельным урезанным токеном.
-20 минут — наш общий timeout job, а не лимит Socket: по истечении GitHub останавливает runner,
+30 минут — наш общий timeout job, а не лимит Socket: по истечении GitHub останавливает runner,
 успешного завершения проверки при этом нет; серверный scan уже мог быть создан и продолжить обработку.
 
 Python CLI также умеет одиночный full scan без control baseline: например, --scm github в обычном push pipeline
@@ -667,3 +667,120 @@ Python — CI/SCM orchestration, scan diff, built-in comments и интегра�
 Окончательную замену server wrapper нужно принимать после полного native resolution lifecycle test.
 Node остаётся полезен для package analysis, install-time Firewall и генерации manifests.
 Release gate требует отдельной валидации: Python full-scan path без comparison автоматически не блокирует findings.
+
+## Массовый запуск через organization ruleset: вывод исследования 11.11.2026
+
+Требования: один scan полного snapshot PR, server-applied policy и native resolutions,
+полный Warn/Block report в PR, отключённые ignore-команды, 30 минут на job.
+Нативный Block должен давать ненулевой exit; Warn сам по себе у обоих клиентов даёт 0.
+Если по требованиям POC красным должен быть также Warn, это отдельная логика, которой native verdict не предоставляет.
+
+Python 2.11.13 не скачивает policy или записи resolutions отдельными запросами: Core принимает
+alert.action из scan API. Resolutions и policy вычисляет backend; alert-resolution:read/list нужны для
+администрирования/диагностики самих записей, а не для применения уже рассчитанного server action.
+Полный live lifecycle Python до/активное/отозванное исключение ещё не завершён.
+
+| Запуск | Socket token scopes |
+|---|---|
+| Python PR с автоматическим baseline | full-scans:create, full-scans:list, diff-scans:create, diff-scans:list, repo:list |
+| Node scan create --report | full-scans:create, full-scans:list, security-policy:read |
+| Node scan create + отдельный gate по server actions | full-scans:create, full-scans:list |
+| Проверка metadata dashboard baseline | Дополнительно repo:list |
+| Автоматическое создание Socket repository через соответствующую операцию | Дополнительно repo:create; можно вынести в provisioning |
+
+repo:list читает metadata одного Socket repo, включая default_branch/head_full_scan_id;
+явный --base-scan-id обходит этот поиск. Scopes не заменяют ограничения токена по разрешённым репозиториям.
+GitHub token: contents:read для checkout и pull-requests:write для PR comments. Ни Socket GitHub App,
+ни GitHub org-admin credential обычному scanner job не нужны. Administration нужно процессу настройки ruleset,
+а не каждому его запуску. Минимальные профили ещё не проверены отдельными урезанными credentials.
+
+Целевая схема: центральный workflow в lidofinance/actions/.github/workflows/socket-pr.yml, выбранный в org ruleset;
+репозитории и default branches выбираются ruleset, фактические repo/SHA/branch/PR берутся из event.
+Helpers и lock инструмента читаются из доверенного центрального ref, а не из PR target.
+Org Actions secret доступен только выбранным target repositories; Socket token разрешает ту же область.
+Для fork/Dependabot PR нужно отдельно проверить доступность secrets и прав comments; ruleset их не повышает.
+Default-branch scans требуют отдельного распространения push workflow или централизованного scheduler:
+правило required workflows запускает PR/merge-group experience и само не разворачивает push scans во все repos.
+Сами rulesets и production actions repository в рамках этого изменения не модифицировались.
+
+Ограничения перед массовым включением: у Python GitHub adapter 2.11.13 событие reopened и merge_group
+не поддерживается его check_event_type и может закончиться exit 0 без assessment.
+Org ruleset использует default activity types, игнорируя YAML event filters; это надо исправить/подтвердить до enforcement.
+Сначала Evaluate и representative repos/события, затем Active. Required status check сам по себе не устанавливает workflow.
+
+### Full scan, blocking и полный PR comment
+
+По README policy enforcement ориентирован на diff mode. В socketcli.py условие
+force_api_mode or not comparison_ran устанавливает config.disable_blocking=True;
+OutputHandler.return_exit_code при этом возвращает 0 даже при Block. --strict-blocking guard не отменяет.
+Встроенные SCM comments публикуются внутри comparison_ran; full mode не даёт тот же full PR-comment flow.
+Внешне похожие режимы нужно различать:
+
+| Режим | Новые scans | Gate / comment |
+|---|---|---|
+| Обычный PR с существующим baseline | 1 PR scan | Native Block gate; comment новых findings |
+| PR с --strict-blocking и существующим baseline | 1 PR scan | Gate новых и unchanged Block; comment по-прежнему новых |
+| Одиночный full mode | 1 | Findings в JSON при включённом output; native blocking отключён, built-in PR comment отсутствует |
+| Текущий POC с новым пустым контролем | 2 | Все findings становятся new; встроенный PR comment и diff gate |
+
+Offline проверены неизменённые AST nodes guard и двух OutputHandler methods из pinned vendor source:
+full+Block -> 0; diff+new Block -> 1; diff+Warn -> 0; diff+existing Block strict -> 1, default -> 0.
+Это source-level проверка со stub findings, не live API scan и не повторение lifecycle resolutions.
+Evidence сохранён вне application PR в socket-poc-lab/docs/socket-poc/evidence/python-full-mode-source-check-2026-11-11.json.
+
+Вывод: ни один закреплённый native вариант пока не закрывает все требования. Python лучше подходит как
+SCM-интеграция с server actions, но full gate/full comment и события требуют подтверждения или исправления.
+Node native имеет доказанное расхождение resolutions; один full scan + gate/comment по server action
+остаётся вариантом с собственной небольшой обвязкой. Массовое native enforcement до этих проверок не рекомендуется.
+
+Основной Org Alerts dashboard документирован как default-branch view, а не worst-of всех открытых PR.
+set-as-alerts-page выбирает head, не делает union/max нескольких PR scans. Последний чистый scan не должен
+стирать visibility проблем другого PR. Для этого нужна подтверждённая vendor multi-branch/PR view либо
+отдельная агрегация актуального default scan и последних scans открытых PR с очисткой закрытых/устаревших.
+В качестве обхода не меняем Socket default branch и не подменяем имя ветки feature scan.
+
+Источники:
+- https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/socketsecurity/socketcli.py
+- https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/socketsecurity/output.py
+- https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/socketsecurity/core/__init__.py
+- https://github.com/SocketDev/socket-python-cli/blob/bb77908c9921f77ef6b8e0008a29937fe725811d/socketsecurity/core/scm/github.py
+- https://docs.socket.dev/docs/organization-alerts
+- https://docs.socket.dev/docs/socket-scan
+- https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets
+
+### Draft question to Socket Support — not sent
+
+Subject: Python CLI: full-snapshot PR enforcement without a baseline, and organization-wide PR visibility
+
+Hi Socket team,
+
+We are evaluating socketsecurity 2.11.13 (socketcli) for an Enterprise rollout across many GitHub repositories,
+using a centrally maintained workflow enforced by organization rulesets. We do not use the Socket GitHub App.
+
+We need each run to scan the entire PR-head snapshot, report all current Warn/Block findings in the PR
+(including pre-existing findings), and exit non-zero when any unsuppressed finding has a server policy action
+of Block. Native server-side Alert Resolutions must be honored. Comment-based ignore commands must be disabled.
+We want one real scan per run, without creating an empty baseline or requiring a previously stored baseline.
+
+Our inspection of 2.11.13 suggests that a full scan without comparison sets disable_blocking=True;
+strict-blocking is supported only in diff mode. Built-in SCM security comments also appear to use new_alerts,
+while unchanged Block findings can affect strict-blocking without appearing in that comment.
+
+1. Is there a supported native mode/command that meets all these requirements without a baseline?
+   Please provide an exact invocation and the minimum Socket API scopes. Can full mode be used as a blocking gate?
+2. Is the full-mode non-blocking behavior intentional? Is there a newer stable version, flag, or planned fix?
+3. Can native PR comments include all current Warn/Block findings, rather than only newly introduced findings,
+   without a synthetic baseline or our own report/comment renderer?
+4. Can you confirm that policy and native Alert Resolution outcomes are fully reflected in scan/diff alert.action,
+   so the scanner does not need security-policy:read or alert-resolution:read/list?
+5. For CLI-created scans, is there a supported Socket console view that aggregates the latest default-branch scan
+   and the latest scans of all open PRs? We need visibility of the worst current findings, so a clean scan of one PR
+   must not hide findings in another. We understand set-as-alerts-page does not aggregate PR scans and is ignored
+   for non-default branches. Should we use tracked branches, another API option, or another supported integration?
+6. Which Python CLI version supports all GitHub ruleset events, including pull_request reopened and merge_group?
+   In 2.11.13, Github.check_event_type appears to exit 0 for unsupported events; how should we avoid a green check
+   without a completed assessment?
+
+If the combination is not currently supported natively, what integration do you recommend for these requirements?
+
+Thank you.
