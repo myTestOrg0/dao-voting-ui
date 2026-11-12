@@ -1,0 +1,9 @@
+{
+  "name": "socket-block-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Test fixture for the Socket PR check. Do not install: chalk 5.6.1 is a known malicious release.",
+  "dependencies": {
+    "chalk": "5.6.1"
+  }
+}
