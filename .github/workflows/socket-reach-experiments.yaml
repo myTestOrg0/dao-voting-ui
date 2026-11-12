@@ -58,7 +58,8 @@ jobs:
           jq '.dependencies["socket-prepare-probe"]="github:myTestOrg0/dao-voting-ui#socket-prepare-probe"' package.json > p.json && mv p.json package.json
           mkdir -p pages
           printf 'import probe from "socket-prepare-probe";\nexport default probe;\n' > pages/socket-probe-import.ts
-          grep -n "socket-prepare-probe" package.json
+          printf '\n"socket-prepare-probe@github:myTestOrg0/dao-voting-ui#socket-prepare-probe":\n  version "1.0.0"\n  resolved "https://codeload.github.com/myTestOrg0/dao-voting-ui/tar.gz/%s"\n' "4a1242847b8eaa1745ad005d07dd810da584aefe" >> yarn.lock
+          grep -n "socket-prepare-probe" package.json; tail -4 yarn.lock
       - name: Scan
         working-directory: candidate
         env:
@@ -74,7 +75,7 @@ jobs:
             --json-file "$out/report.json" --reach --reach-disable-analytics --reach-debug > "$out/cli.log" 2>&1 || rc=$?
           echo "RESULT|${{ matrix.name }}|exit=$rc|marker=$(tr '\n' ',' < /tmp/socket-probe-marker 2>/dev/null || echo none)"
           echo "--- log lines mentioning the probe"
-          sed -E 's/\x1b\[[0-9;]*m//g' "$out/cli.log" | grep -iE "socket-prepare-probe|git\+|github:|prepare" | cut -c1-400 | head -20 || true
+          sed -E 's/\x1b\[[0-9;]*m//g' "$out/cli.log" | grep -iE "socket-prepare-probe|git\+|github:|codeload|prepare|allow-git" | cut -c1-400 | head -20 || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
