@@ -49,6 +49,8 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       # Experiment: reuse one stored empty scan instead of uploading one per run.
       SHARED_EMPTY_SCAN_ID: ${{ vars.SOCKET_EMPTY_BASE_SCAN_ID }}
+      # Experiment: keep the empty control scan in a separate Socket repository.
+      CONTROL_REPO: ${{ vars.SOCKET_EMPTY_CONTROL_REPO || github.event.repository.name }}
     steps:
       - name: Fail on merge queue events (not supported yet)
         if: github.event_name == 'merge_group'
@@ -94,7 +96,7 @@ jobs:
           # The branch name is unique per run and is never the default branch,
           # so the Socket dashboard baseline is left alone.
           socketcli --scm api \
-            --repo "$SOCKET_REPO" \
+            --repo "$CONTROL_REPO" \
             --branch "socket-empty-control-$GITHUB_RUN_ID" \
             --target-path "$RUNNER_TEMP/socket-empty" \
             --pr-number 0 \
