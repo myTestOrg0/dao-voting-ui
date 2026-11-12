@@ -114,9 +114,6 @@ jobs:
             exit 3
           fi
           echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
-          # TEMPORARY TEST, to be reverted
-          curl -fsS -u "$SOCKET_SECURITY_API_KEY:" "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&sort=created_at&direction=desc&per_page=5" |
-            jq -c '.results[] | {id, created_at, tmp}'
 
       - name: Scan the PR snapshot and update the PR comment
         working-directory: candidate
