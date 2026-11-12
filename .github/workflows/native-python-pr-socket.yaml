@@ -49,7 +49,7 @@ jobs:
       run:
         shell: bash
     env:
-      EMPTY_CONTROL_SCAN_ID: 72f57c51-3085-4856-b9f6-aa51fa3dd515
+      EMPTY_CONTROL_SCAN_ID: 00000000-0000-4000-8000-000000000000
       SCAN_REPO: ${{ github.event.repository.name }}
       SCAN_BRANCH: ${{ github.head_ref }}
       SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
