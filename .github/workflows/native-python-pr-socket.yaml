@@ -224,9 +224,8 @@ jobs:
           jq -e --arg base "$BASELINE_SCAN_ID" --arg head "$head_scan" \
             '.diff_scan.before_full_scan.id == $base and .diff_scan.after_full_scan.id == $head' "$comparison" > /dev/null ||
             not_scanned 'the comparison used other scans'
-          jq -e '[.. | objects | select(has("incomplete")) | .incomplete] == [false]' "$comparison" > /dev/null ||
+          jq -e '.diff_scan.incomplete == false' "$comparison" > /dev/null ||
             not_scanned 'Socket did not confirm that the comparison is complete'
-          echo "incomplete path (debug): $(jq -c '[paths | select(.[-1] == "incomplete")]' "$comparison")"
 
       - name: Publish the job summary
         if: always()
