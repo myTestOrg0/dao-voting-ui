@@ -90,6 +90,16 @@ TOML
     echo "$deps" > requirements.txt
     printf '[[index]]\nurl = "https://test.pypi.org/simple/"\ndefault = true\n' > uv.toml
     printf '[global]\nindex-url = https://test.pypi.org/simple/\n' > pip.conf ;;
+  wheel-control)
+    echo 'requests==2.19.1' > requirements.txt ;;
+  uv-toml-index)
+    echo 'requests==2.19.1' > requirements.txt
+    printf '[[index]]\nurl = "https://example.invalid/simple/"\ndefault = true\n' > uv.toml ;;
+  pyproject-uv-index)
+    echo 'requests==2.19.1' > requirements.txt
+    printf '[project]\nname = "pyprobe-app"\nversion = "0.1.0"\n\n[[tool.uv.index]]\nurl = "https://example.invalid/simple/"\ndefault = true\n' > pyproject.toml ;;
+  req-index-line)
+    printf -- '--index-url https://example.invalid/simple/\nrequests==2.19.1\n' > requirements.txt ;;
   *) echo "unknown scenario $scenario"; exit 2 ;;
 esac
 
