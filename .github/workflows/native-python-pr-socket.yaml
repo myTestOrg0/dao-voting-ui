@@ -73,6 +73,9 @@ jobs:
           python -m pip install --require-hashes --only-binary=:all: \
             -r candidate/.github/tools/socket-python-cli.lock
           socketcli --version
+          # TEST ONLY: reachability needs uv; unpinned here, would go into the lock file.
+          python -m pip install uv
+          uv --version; node --version
 
       - name: Remove reachability facts files supplied by the PR
         # The CLI uploads every .socket.facts.json it finds, and Socket lowers
