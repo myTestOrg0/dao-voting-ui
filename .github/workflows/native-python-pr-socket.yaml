@@ -172,8 +172,9 @@ jobs:
 
           [ -s "$report" ] ||
             not_scanned 'the CLI wrote no report'
-          jq -e '.scan_failed == false and (.full_scan_id | length > 0)' "$report" > /dev/null ||
-            not_scanned 'Socket did not complete the scan'
+          # .scan_failed is not checked: the CLI sets it to true for a Block finding.
+          jq -e '.full_scan_id | length > 0' "$report" > /dev/null ||
+            not_scanned 'the report has no scan ID'
           jq -e --arg commit "$SCAN_COMMIT" '.commit_sha == $commit' "$report" > /dev/null ||
             not_scanned 'the report belongs to another commit'
           [ -n "$BASELINE_SCAN_ID" ] ||
