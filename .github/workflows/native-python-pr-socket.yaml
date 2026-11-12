@@ -212,7 +212,6 @@ jobs:
               curl -fsS --max-time 60 -K - "$@"
           }
           head_scan="$(jq -r '.full_scan_id' "$report")"
-          head_scan="$BASELINE_SCAN_ID" # TEST ONLY: ask for a comparison that does not exist
           comparison="$RUNNER_TEMP/comparison.json"
 
           comparison_id="$(socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" |
