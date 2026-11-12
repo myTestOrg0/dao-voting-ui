@@ -154,6 +154,8 @@ jobs:
             --strict-blocking \
             --disable-ignore \
             --disable-overview \
+            --reach \
+            --reach-disable-analytics \
             --json-file "$RUNNER_TEMP/socket/report.json" \
             --summary-file "$RUNNER_TEMP/socket/summary.txt"
 
