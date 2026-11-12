@@ -16,27 +16,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: 1-reach-ok-with-lifecycle-scripts
-            mutate: scripts
-            flags: --reach --reach-disable-analytics
-          - name: 2-install-fails
-            mutate: bogus-dep
-            flags: --reach --reach-disable-analytics
-          - name: 3-install-fails-continue-flags
-            mutate: bogus-dep
-            flags: --reach --reach-disable-analytics --reach-continue-on-install-errors --reach-continue-on-analysis-errors
-          - name: 4-analysis-timeout
+          - name: 8-analysis-timeout-then-plain-rescan
             mutate: none
             flags: --reach --reach-disable-analytics --reach-analysis-timeout 1s
-          - name: 5-analysis-timeout-continue-flags
-            mutate: none
-            flags: --reach --reach-disable-analytics --reach-analysis-timeout 1s --reach-continue-on-install-errors --reach-continue-on-analysis-errors
-          - name: 6-no-lockfile
-            mutate: no-lock
-            flags: --reach --reach-disable-analytics
-          - name: 7-no-lockfile-continue-flags
-            mutate: no-lock
-            flags: --reach --reach-disable-analytics --reach-continue-on-missing-lock-files --reach-continue-on-install-errors --reach-continue-on-analysis-errors
     defaults:
       run:
         shell: bash
@@ -96,6 +78,15 @@ jobs:
             --target-path . --base-scan-id "$BASELINE_SCAN_ID" --ignore-commit-files --strict-blocking \
             --json-file "$out/report.json" ${{ matrix.flags }} > "$out/cli.log" 2>&1
           rc=$?
+          if [ "$rc" -eq 3 ] && [ ! -s "$out/report.json" ]; then
+            echo "RESULT first attempt exit=$rc, no report: falling back to a scan without reachability"
+            echo "RESULT leftover facts files: $(find . -path ./.git -prune -o -name '.socket.facts.json*' -print | wc -l)"
+            find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
+            socketcli --scm api --repo "$SCAN_REPO" --branch "$SCAN_BRANCH" --commit-sha "$SCAN_COMMIT" \
+              --target-path . --base-scan-id "$BASELINE_SCAN_ID" --ignore-commit-files --strict-blocking \
+              --json-file "$out/report.json" > "$out/cli-fallback.log" 2>&1
+            rc=$?
+          fi
           set -e
           echo "RESULT name=${{ matrix.name }} exit=$rc seconds=$(( $(date +%s) - start )) alerts=$(jq '.new_alerts|length' "$out/report.json" 2>/dev/null || echo no-report)"
           echo "RESULT marker=$(cat /tmp/socket-lifecycle-marker 2>/dev/null | wc -l)"
