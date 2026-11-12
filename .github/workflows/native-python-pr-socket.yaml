@@ -204,22 +204,29 @@ jobs:
             not_scanned 'the report belongs to another commit'
           [ -n "$BASELINE_SCAN_ID" ] ||
             not_scanned 'no empty baseline scan was created'
-          jq -e --arg base "$BASELINE_SCAN_ID" '.diff_url | contains("/diff/" + $base + "/")' "$report" > /dev/null ||
-            not_scanned 'the snapshot was not compared with the empty baseline scan'
 
-          # DEBUG (temporary): show the shape of the diff-scans API responses.
+          # Ask Socket for the comparison itself. The CLI report does not say which
+          # scans were compared or whether the comparison was complete.
           socket_api() {
             printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
               curl -fsS --max-time 60 -K - "$@"
           }
           head_scan="$(jq -r '.full_scan_id' "$report")"
-          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" > "$RUNNER_TEMP/socket/diff-list.json"
-          echo "list shape:"; jq -c '[paths(scalars) | map(if type=="number" then "N" else . end) | join(".")] | unique' "$RUNNER_TEMP/socket/diff-list.json" | cut -c1-1500
-          diff_id="$(jq -r '(.results // .diff_scans // .)[0].id // empty' "$RUNNER_TEMP/socket/diff-list.json")"
-          echo "diff_id=$diff_id count=$(jq '(.results // .diff_scans // .) | length' "$RUNNER_TEMP/socket/diff-list.json")"
-          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$diff_id?if_cached=true" > "$RUNNER_TEMP/socket/diff-get.json" || echo "get failed: $?"
-          echo "get shape (without artifacts):"; jq -c 'del(.. | .artifacts?) | [paths(scalars) | map(if type=="number" then "N" else . end) | join(".")] | unique' "$RUNNER_TEMP/socket/diff-get.json" | cut -c1-1500
-          jq -c '[.. | objects | select(has("incomplete")) | .incomplete]' "$RUNNER_TEMP/socket/diff-get.json" "$RUNNER_TEMP/socket/diff-list.json"
+          comparison="$RUNNER_TEMP/comparison.json"
+
+          comparison_id="$(socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" |
+            jq -r 'if (.results | length) == 1 then .results[0].id else empty end')" ||
+            not_scanned 'Socket did not list the comparison'
+          [ -n "$comparison_id" ] ||
+            not_scanned 'Socket has no single comparison of this scan with the empty baseline scan'
+          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$comparison_id?if_cached=true" > "$comparison" ||
+            not_scanned 'Socket did not return the comparison'
+          jq -e --arg base "$BASELINE_SCAN_ID" --arg head "$head_scan" \
+            '.diff_scan.before_full_scan.id == $base and .diff_scan.after_full_scan.id == $head' "$comparison" > /dev/null ||
+            not_scanned 'the comparison used other scans'
+          jq -e '[.. | objects | select(has("incomplete")) | .incomplete] == [false]' "$comparison" > /dev/null ||
+            not_scanned 'Socket did not confirm that the comparison is complete'
+          echo "incomplete path (debug): $(jq -c '[paths | select(.[-1] == "incomplete")]' "$comparison")"
 
       - name: Publish the job summary
         if: always()
