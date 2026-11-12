@@ -17,8 +17,8 @@ GitPython==3.2.1 \
     --hash=sha256:d66b0832aa8755c1a84892937282df0befb16c97e5a64aeebd68be9c5e323f53
 idna==3.20 \
     --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
-Markdown==3.11.3 \
-    --hash=sha256:e1a31a112232504d753e5c01bb8c2de90d3f0ba986b063e10770cf7695b09e73
+Markdown==3.11.2 \
+    --hash=sha256:f80390747a2a0ff2ba54da074ce4f862f72a6685f608cd2637b646a6d83993f5
 mdutils==1.8.1 \
     --hash=sha256:3d62d0a4d19fcd68d1daf956d1832f4a598663c73022bd95b09fae69c994b5ac
 packaging==26.3 \
