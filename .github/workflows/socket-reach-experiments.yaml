@@ -1,0 +1,110 @@
+# TEST ONLY. Reachability failure-mode experiments for the Socket Python CLI.
+# No PR comments (--scm api). Delete with the branch.
+name: Socket reach experiments
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 1-reach-ok-with-lifecycle-scripts
+            mutate: scripts
+            flags: --reach --reach-disable-analytics
+          - name: 2-install-fails
+            mutate: bogus-dep
+            flags: --reach --reach-disable-analytics
+          - name: 3-install-fails-continue-flags
+            mutate: bogus-dep
+            flags: --reach --reach-disable-analytics --reach-continue-on-install-errors --reach-continue-on-analysis-errors
+          - name: 4-analysis-timeout
+            mutate: none
+            flags: --reach --reach-disable-analytics --reach-analysis-timeout 1s
+          - name: 5-analysis-timeout-continue-flags
+            mutate: none
+            flags: --reach --reach-disable-analytics --reach-analysis-timeout 1s --reach-continue-on-install-errors --reach-continue-on-analysis-errors
+          - name: 6-no-lockfile
+            mutate: no-lock
+            flags: --reach --reach-disable-analytics
+          - name: 7-no-lockfile-continue-flags
+            mutate: no-lock
+            flags: --reach --reach-disable-analytics --reach-continue-on-missing-lock-files --reach-continue-on-install-errors --reach-continue-on-analysis-errors
+    defaults:
+      run:
+        shell: bash
+    env:
+      SCAN_REPO: ${{ github.event.repository.name }}
+      SCAN_BRANCH: ${{ github.head_ref }}
+      SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
+      BASE_API_URL: https://api.socket.dev/v0
+    steps:
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SCAN_COMMIT }}
+          path: candidate
+          persist-credentials: false
+      - name: Install CLI and uv
+        run: |
+          python -m pip install -q --require-hashes --only-binary=:all: -r candidate/.github/tools/socket-python-cli.lock
+          python -m pip install -q uv
+      - name: Create the empty baseline
+        id: baseline
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
+          cd "$RUNNER_TEMP/socket-empty"
+          echo '{"components": []}' > .socket.facts.json
+          socket_api() { printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" | curl -fsS --max-time 60 -K - "$@"; }
+          org="$(socket_api "$BASE_API_URL/organizations" | jq -r '.organizations | to_entries | .[0].value.slug')"
+          id="$(socket_api -X POST -F '.socket.facts.json=@.socket.facts.json' "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" | jq -r .id)"
+          echo "scan_id=$id" >> "$GITHUB_OUTPUT"
+      - name: Mutate the candidate
+        working-directory: candidate
+        run: |
+          case "${{ matrix.mutate }}" in
+            scripts)
+              marker='echo SOCKET_TEST_LIFECYCLE_RAN; if [ -n "$SOCKET_SECURITY_API_KEY" ]; then echo SOCKET_TEST_KEY_VISIBLE; fi; echo ran >> /tmp/socket-lifecycle-marker'
+              jq --arg m "$marker" '.scripts.preinstall=$m | .scripts.postinstall=$m | .scripts.prepare=$m' package.json > p.json && mv p.json package.json ;;
+            bogus-dep)
+              jq '.dependencies["lido-socket-test-nonexistent-package"]="9.9.9"' package.json > p.json && mv p.json package.json ;;
+            no-lock)
+              rm -f yarn.lock ;;
+          esac
+          git status --short | head
+      - name: Scan with reachability
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+        run: |
+          out="$RUNNER_TEMP/socket"
+          set +e
+          start=$(date +%s)
+          socketcli --scm api --repo "$SCAN_REPO" --branch "$SCAN_BRANCH" --commit-sha "$SCAN_COMMIT" \
+            --target-path . --base-scan-id "$BASELINE_SCAN_ID" --ignore-commit-files --strict-blocking \
+            --json-file "$out/report.json" ${{ matrix.flags }} > "$out/cli.log" 2>&1
+          rc=$?
+          set -e
+          echo "RESULT name=${{ matrix.name }} exit=$rc seconds=$(( $(date +%s) - start )) alerts=$(jq '.new_alerts|length' "$out/report.json" 2>/dev/null || echo no-report)"
+          echo "RESULT marker=$(cat /tmp/socket-lifecycle-marker 2>/dev/null | wc -l)"
+          grep -E "SOCKET_TEST_" "$out/cli.log" | sort | uniq -c || true
+          echo "--- key log lines"
+          grep -iE "Reachability analysis (failed|completed|not possible)|Pre-installing|installed successfully|fail|error|Missing|continu|timed out|timeout|root project\)|scan_type|lock ?file|Running (import|full) reach" "$out/cli.log" | grep -viE "High CVE|Critical CVE" | cut -c1-260 | head -40
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: reach-${{ matrix.name }}
+          path: ${{ runner.temp }}/socket/
+          retention-days: 3
