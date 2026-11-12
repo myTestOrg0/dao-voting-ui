@@ -1,0 +1,120 @@
+name: Wrapped baseline Socket
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: socket-baseline-${{ github.event.repository.default_branch }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    if: github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
+      SOCKET_REPO: ${{ github.event.repository.name }}
+      SCAN_BRANCH: ${{ github.event.repository.default_branch }}
+      SOCKET_MODE: policy
+      SOCKET_REACH: 'true'
+      SOCKET_PUBLISH_BASELINE: 'true'
+    steps:
+      - name: Prepare report directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/socket-report"
+          echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-report" >> "$GITHUB_ENV"
+          echo "SOCKET_VEX_DIR=$RUNNER_TEMP/socket-vex" >> "$GITHUB_ENV"
+      - name: Checkout workflow tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: tooling
+          persist-credentials: false
+      - name: Checkout scan target
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.repository.default_branch }}
+          path: candidate
+          persist-credentials: false
+      - name: Record scanned commit
+        working-directory: candidate
+        run: |
+          echo "SCAN_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install hash-pinned Socket CLI
+        run: |
+          echo '8e08f1210ed72a39f14ab565083a228591e50ed9e4716aa5e4d2c3f1fa46c023  tooling/.github/tools/socket-cli.lock' | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/socket-cli"
+          jq '.packages[""] + {private: true}' tooling/.github/tools/socket-cli.lock > "$RUNNER_TEMP/socket-cli/package.json"
+          cp tooling/.github/tools/socket-cli.lock "$RUNNER_TEMP/socket-cli/package-lock.json"
+          # npm verifies the SHA-512 integrity of the CLI and each locked dependency.
+          npm ci --prefix "$RUNNER_TEMP/socket-cli" --ignore-scripts --no-audit --no-fund
+          echo "$RUNNER_TEMP/socket-cli/node_modules/.bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/socket-cli/node_modules/.bin/socket" --version
+      - name: Create reachability scan with SCA fallback
+        id: scan
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          socket scan create --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
+            --branch "$SCAN_BRANCH" --commit-hash "$SCAN_COMMIT" \
+            --default-branch --set-as-alerts-page \
+            --reach --reach-version 15.14.1 --reach-disable-analytics \
+            --reach-analysis-timeout 5m --reach-analysis-memory-limit 4GB \
+            --reach-fallback-to-regular-scan \
+            --json . | tee "$SOCKET_RESULTS_DIR/cli-output.log"
+      - name: Download server findings and metadata
+        id: download
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          scan_id=$(python3 tooling/.github/scripts/wrapped_report.py scan-id)
+          # Retry transient network/server errors; authentication failures remain failures.
+          curl --fail-with-body --silent --show-error --retry 2 --retry-delay 1 \
+            --connect-timeout 15 --max-time 120 --user "$SOCKET_SECURITY_API_KEY:" \
+            "https://api.socket.dev/v0/orgs/$SOCKET_ORG/full-scans/$scan_id?include_license_details=true" \
+            --output "$SOCKET_RESULTS_DIR/scan-artifacts.ndjson"
+
+          curl --fail-with-body --silent --show-error --retry 2 --retry-delay 1 \
+            --connect-timeout 15 --max-time 120 --user "$SOCKET_SECURITY_API_KEY:" \
+            "https://api.socket.dev/v0/orgs/$SOCKET_ORG/repos/$SOCKET_REPO" \
+            --output "$SOCKET_RESULTS_DIR/repository.json"
+          curl --fail-with-body --silent --show-error --retry 2 --retry-delay 1 \
+            --connect-timeout 15 --max-time 120 --user "$SOCKET_SECURITY_API_KEY:" \
+            "https://api.socket.dev/v0/orgs/$SOCKET_ORG/full-scans/$scan_id/metadata" \
+            --output "$SOCKET_RESULTS_DIR/metadata.json"
+      - name: Write Summary and return the policy verdict
+        if: always()
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+        run: |
+          python3 tooling/.github/scripts/wrapped_report.py
+      - name: Report setup failure if no Summary was produced
+        if: failure()
+        run: |
+          if [ ! -f "$SOCKET_RESULTS_DIR/summary.md" ]; then
+            echo '## Socket infrastructure error' >> "$GITHUB_STEP_SUMMARY"
+            echo 'No completed assessment is available. See the failed setup/scan step.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload structured report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wrapped-baseline-socket
+          path: |
+            ${{ env.SOCKET_RESULTS_DIR }}/*.json
+            ${{ env.SOCKET_RESULTS_DIR }}/*.md
+          retention-days: 7

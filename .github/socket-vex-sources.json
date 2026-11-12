@@ -1,0 +1,7 @@
+{
+  "sources": [
+    {"name": "own", "repository": "myTestOrg0/vexel", "ref": "codex/socket-poc-integrations"},
+    {"name": "docker-dhi", "repository": "docker-hardened-images/advisories", "ref": "main"},
+    {"name": "aqua", "repository": "aquasecurity/vexhub", "ref": "main"}
+  ]
+}

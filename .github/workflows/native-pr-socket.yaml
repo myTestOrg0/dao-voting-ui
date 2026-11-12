@@ -1,0 +1,106 @@
+name: Native PR Socket
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: native-socket-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.base_ref == github.event.repository.default_branch &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOCKET_ORG: ${{ vars.SOCKET_ORG || 'lido-labs' }}
+      SOCKET_REPO: ${{ github.event.repository.name }}
+      SCAN_BRANCH: ${{ github.head_ref || github.ref_name }}
+      SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Prepare report directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/socket-report"
+          echo "SOCKET_RESULTS_DIR=$RUNNER_TEMP/socket-report" >> "$GITHUB_ENV"
+      - name: Checkout PR snapshot
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.SCAN_COMMIT }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install hash-pinned Socket CLI
+        run: |
+          echo '8e08f1210ed72a39f14ab565083a228591e50ed9e4716aa5e4d2c3f1fa46c023  .github/tools/socket-cli.lock' | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/socket-cli"
+          jq '.packages[""] + {private: true}' .github/tools/socket-cli.lock > "$RUNNER_TEMP/socket-cli/package.json"
+          cp .github/tools/socket-cli.lock "$RUNNER_TEMP/socket-cli/package-lock.json"
+          # npm verifies the SHA-512 integrity of the CLI and each locked dependency.
+          npm ci --prefix "$RUNNER_TEMP/socket-cli" --ignore-scripts --no-audit --no-fund
+          echo "$RUNNER_TEMP/socket-cli/node_modules/.bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/socket-cli/node_modules/.bin/socket" --version
+      - name: Run native CLI without a verdict wrapper
+        id: scan
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          socket scan create --org "$SOCKET_ORG" --repo "$SOCKET_REPO" \
+            --branch "$SCAN_BRANCH" --commit-hash "$SCAN_COMMIT" \
+            --no-set-as-alerts-page --report --report-level warn --markdown . \
+            | tee "$SOCKET_RESULTS_DIR/native-report.md"
+      - name: Publish native report and prepare PR comment
+        if: always()
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo '<!-- socket-native-report -->'
+            echo "## Socket native: $SCAN_OUTCOME"
+            echo "Commit: $SCAN_COMMIT · [Actions run]($RUN_URL)"
+            echo
+            if [ -s "$SOCKET_RESULTS_DIR/native-report.md" ]; then
+              cat "$SOCKET_RESULTS_DIR/native-report.md"
+            else
+              echo 'No completed CLI report. See the failed setup/scan step in Actions.'
+            fi
+          } > "$SOCKET_RESULTS_DIR/pr-comment.md"
+          cat "$SOCKET_RESULTS_DIR/pr-comment.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Create or update native PR comment
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          comment_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- socket-native-report -->"))) | .id' \
+            | tail -n 1)
+          jq -n --rawfile body "$SOCKET_RESULTS_DIR/pr-comment.md" '{body: $body}' > "$RUNNER_TEMP/socket-comment.json"
+          if [ -n "$comment_id" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
+              --input "$RUNNER_TEMP/socket-comment.json" --jq .html_url
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              --input "$RUNNER_TEMP/socket-comment.json" --jq .html_url
+          fi
+      - name: Upload native report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-pr-socket
+          path: ${{ env.SOCKET_RESULTS_DIR }}/*.md
+          retention-days: 7
