@@ -47,7 +47,6 @@ jobs:
       SCAN_BRANCH: ${{ github.head_ref }}
       SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      RESULTS_DIR: ${{ runner.temp }}/socket
       # Experiment: reuse one stored empty scan instead of uploading one per run.
       SHARED_EMPTY_SCAN_ID: ${{ vars.SOCKET_EMPTY_BASE_SCAN_ID }}
     steps:
@@ -82,7 +81,7 @@ jobs:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: |
           : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event (fork and Dependabot PRs need a separate decision)}"
-          mkdir -p "$RESULTS_DIR" "$RUNNER_TEMP/socket-empty"
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
           if [ -n "$SHARED_EMPTY_SCAN_ID" ]; then
             echo "Reusing the shared empty control scan $SHARED_EMPTY_SCAN_ID"
             echo "BASE_SCAN_ID=$SHARED_EMPTY_SCAN_ID" >> "$GITHUB_ENV"
@@ -99,9 +98,9 @@ jobs:
             --branch "socket-empty-control-$GITHUB_RUN_ID" \
             --target-path "$RUNNER_TEMP/socket-empty" \
             --pr-number 0 \
-            --json-file "$RESULTS_DIR/baseline.json"
+            --json-file "$RUNNER_TEMP/socket/baseline.json"
 
-          base_scan_id=$(jq -er '.full_scan_id | select(length > 0)' "$RESULTS_DIR/baseline.json")
+          base_scan_id=$(jq -er '.full_scan_id | select(length > 0)' "$RUNNER_TEMP/socket/baseline.json")
           echo "BASE_SCAN_ID=$base_scan_id" >> "$GITHUB_ENV"
 
       - name: Scan the PR snapshot and update the PR comment
@@ -128,8 +127,8 @@ jobs:
             --strict-blocking \
             --disable-ignore \
             --disable-overview \
-            --json-file "$RESULTS_DIR/report.json" \
-            --summary-file "$RESULTS_DIR/summary.txt"
+            --json-file "$RUNNER_TEMP/socket/report.json" \
+            --summary-file "$RUNNER_TEMP/socket/summary.txt"
 
       - name: Confirm that the scan really assessed this commit
         # A green scan step is not enough: the CLI exits 0 when it skips the
@@ -141,7 +140,7 @@ jobs:
             and (.full_scan_id | length > 0)
             and .commit_sha == $commit
             and (.diff_url | contains("/diff/" + $base + "/"))
-          ' "$RESULTS_DIR/report.json" > /dev/null || {
+          ' "$RUNNER_TEMP/socket/report.json" > /dev/null || {
             echo '::error::Socket did not return a completed comparison for this commit. Treat the PR as not scanned.'
             exit 3
           }
@@ -151,9 +150,9 @@ jobs:
         run: |
           {
             echo '## Socket dependency scan'
-            if [ -s "$RESULTS_DIR/summary.txt" ]; then
+            if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
               echo '```text'
-              cat "$RESULTS_DIR/summary.txt"
+              cat "$RUNNER_TEMP/socket/summary.txt"
               echo '```'
             else
               echo 'No completed assessment. See the failed step.'
