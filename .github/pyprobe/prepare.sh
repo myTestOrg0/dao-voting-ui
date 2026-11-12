@@ -80,6 +80,16 @@ build-backend = "probe_backend"
 backend-path = ["."]
 TOML
     uv lock -q ;;
+  sdist-only)
+    # Vulnerable releases that were published without any wheel.
+    printf 'import Crypto\nimport ansible\nimport django\n' >> app.py
+    printf '%s\npycrypto==2.6.1\nansible==2.9.9\nDjango==1.4.22\n' "$deps" > requirements.txt ;;
+  index-line)
+    printf -- '--index-url https://test.pypi.org/simple/\n%s\n' "$deps" > requirements.txt ;;
+  uv-config)
+    echo "$deps" > requirements.txt
+    printf '[[index]]\nurl = "https://test.pypi.org/simple/"\ndefault = true\n' > uv.toml
+    printf '[global]\nindex-url = https://test.pypi.org/simple/\n' > pip.conf ;;
   *) echo "unknown scenario $scenario"; exit 2 ;;
 esac
 

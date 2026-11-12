@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [pypi, pypi-no-downloads, path-dep, git-dep, setup-py, editable, backend-uvlock]
+        scenario: [sdist-only, index-line, uv-config]
     defaults:
       run:
         shell: bash
@@ -76,7 +76,7 @@ jobs:
           find . -maxdepth 2 -not -path './.git*' | sort | head -40
           cp .socket.facts.json "$out/facts.json" 2>/dev/null || true
           echo "--- log lines about installing"
-          sed -E 's/\x1b\[[0-9;]*m//g' "$out/cli.log" | grep -iE "uv |pip|venv|virtualenv|install|built|setup\.py|probe|docopt|Reachab|Unreach" | cut -c1-300 | head -60 || true
+          sed -E 's/\x1b\[[0-9;]*m//g' "$out/cli.log" | grep -iE "Running command|finished with error|install|built|setup\.py|sdist|tar\.gz|test\.pypi|Reachab|Unreach|error" | cut -c1-420 | head -120 || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
