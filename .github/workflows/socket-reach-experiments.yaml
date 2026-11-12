@@ -1,0 +1,83 @@
+# TEST ONLY. Does the reachability engine run lifecycle scripts of a git dependency?
+# No PR comments (--scm api). Delete with the branch.
+name: Socket reach experiments
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: git-dep-default, ignore_scripts: ''}
+          - {name: git-dep-ignore-scripts, ignore_scripts: 'true'}
+    defaults:
+      run:
+        shell: bash
+    env:
+      SCAN_REPO: ${{ github.event.repository.name }}
+      SCAN_BRANCH: ${{ github.head_ref }}
+      SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
+      BASE_API_URL: https://api.socket.dev/v0
+    steps:
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SCAN_COMMIT }}
+          path: candidate
+          persist-credentials: false
+      - name: Install CLI
+        run: |
+          python -m pip install -q --require-hashes --only-binary=:all: -r candidate/.github/tools/socket-python-cli.lock
+          npm --version
+      - name: Create the empty baseline
+        id: baseline
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
+          cd "$RUNNER_TEMP/socket-empty"
+          echo '{"components": []}' > .socket.facts.json
+          socket_api() { printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" | curl -fsS --max-time 60 -K - "$@"; }
+          org="$(socket_api "$BASE_API_URL/organizations" | jq -r '.organizations | to_entries | .[0].value.slug')"
+          id="$(socket_api -X POST -F '.socket.facts.json=@.socket.facts.json' "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" | jq -r .id)"
+          echo "scan_id=$id" >> "$GITHUB_OUTPUT"
+      - name: Add a git dependency with marker lifecycle scripts
+        working-directory: candidate
+        run: |
+          jq '.dependencies["socket-prepare-probe"]="github:myTestOrg0/dao-voting-ui#socket-prepare-probe"' package.json > p.json && mv p.json package.json
+          mkdir -p pages
+          printf 'import probe from "socket-prepare-probe";\nexport default probe;\n' > pages/socket-probe-import.ts
+          grep -n "socket-prepare-probe" package.json
+      - name: Scan
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          NPM_CONFIG_IGNORE_SCRIPTS: ${{ matrix.ignore_scripts }}
+        run: |
+          out="$RUNNER_TEMP/socket"
+          [ -n "$NPM_CONFIG_IGNORE_SCRIPTS" ] || unset NPM_CONFIG_IGNORE_SCRIPTS
+          rc=0
+          socketcli --scm api --repo "$SCAN_REPO" --branch "$SCAN_BRANCH" --commit-sha "$SCAN_COMMIT" \
+            --target-path . --base-scan-id "$BASELINE_SCAN_ID" --ignore-commit-files --strict-blocking \
+            --json-file "$out/report.json" --reach --reach-disable-analytics --reach-debug > "$out/cli.log" 2>&1 || rc=$?
+          echo "RESULT|${{ matrix.name }}|exit=$rc|marker=$(tr '\n' ',' < /tmp/socket-probe-marker 2>/dev/null || echo none)"
+          echo "--- log lines mentioning the probe"
+          sed -E 's/\x1b\[[0-9;]*m//g' "$out/cli.log" | grep -iE "socket-prepare-probe|git\+|github:|prepare" | cut -c1-400 | head -20 || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: reach-${{ matrix.name }}
+          path: ${{ runner.temp }}/socket/
+          retention-days: 3
