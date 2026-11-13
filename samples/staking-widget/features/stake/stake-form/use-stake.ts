@@ -1,0 +1,121 @@
+import { useCallback } from 'react';
+import invariant from 'tiny-invariant';
+
+import { config, useConfig } from 'config';
+import {
+  applyRoundUpGasLimit,
+  useDappStatus,
+  useLidoSDK,
+  useAA,
+  useTxFlow,
+} from 'modules/web3';
+
+import { MATOMO_TX_EVENTS_TYPES } from 'consts/matomo';
+import { trackMatomoEvent } from 'utils/track-matomo-event';
+import { getReferralAddress } from 'utils/get-referral-address';
+
+import { MockLimitReachedError } from './utils';
+import { useTxModalStagesStake } from './hooks/use-tx-modal-stages-stake';
+import { useBells } from './hooks/use-bells';
+
+type StakeArguments = {
+  amount: bigint | null;
+  referral: string | null;
+};
+
+type StakeOptions = {
+  onConfirm?: () => Promise<void> | void;
+  onRetry?: () => void;
+};
+
+export const useStake = ({ onConfirm, onRetry }: StakeOptions) => {
+  const { bells } = useBells();
+  const { address } = useDappStatus();
+  const { isAA } = useAA();
+  const { stake, stETH } = useLidoSDK();
+  const { txModalStages } = useTxModalStagesStake();
+  const txFlow = useTxFlow();
+  const { featureFlags } = useConfig().externalConfig;
+
+  return useCallback(
+    async ({ amount, referral }: StakeArguments): Promise<boolean> => {
+      trackMatomoEvent(MATOMO_TX_EVENTS_TYPES.stakingStart);
+      try {
+        invariant(amount, 'amount is null');
+        invariant(address, 'account is not defined');
+
+        if (
+          config.enableQaHelpers &&
+          window.localStorage.getItem('mockLimitReached') === 'true'
+        ) {
+          throw new MockLimitReachedError('Stake limit reached');
+        }
+
+        const referralAddress = await getReferralAddress(
+          referral,
+          stake.core.rpcProvider,
+        );
+
+        const onStakeTxConfirmed = async () => {
+          const [, balance] = await Promise.all([
+            onConfirm?.(),
+            stETH.balance(address),
+          ]);
+          return balance;
+        };
+
+        const stakeCall = await stake.stakeEthPopulateTx({
+          value: amount,
+          referralAddress,
+        });
+        await txFlow({
+          callsFn: async () => [stakeCall],
+          sendTransaction: async (txStagesCallback) => {
+            await stake.stakeEth({
+              value: amount,
+              callback: txStagesCallback,
+              referralAddress,
+            });
+          },
+          onSign: async ({ payload }) => {
+            txModalStages.sign(amount);
+            return applyRoundUpGasLimit(
+              (payload as bigint) ?? config.STAKE_GASLIMIT_FALLBACK,
+            );
+          },
+          onReceipt: ({ txHashOrCallId }) => {
+            return txModalStages.pending(amount, txHashOrCallId, isAA);
+          },
+          onSuccess: async ({ txHash }) => {
+            const balance = await onStakeTxConfirmed();
+            if (featureFlags.holidayDecorEnabled) {
+              bells();
+            }
+            txModalStages.success(balance, txHash);
+            trackMatomoEvent(MATOMO_TX_EVENTS_TYPES.stakingFinish);
+          },
+          onFailure: ({ error }) => txModalStages.failed(error, onRetry),
+          onMultisigDone: () => txModalStages.successMultisig(),
+        });
+
+        return true;
+      } catch (error) {
+        console.warn(error);
+        txModalStages.failed(error, onRetry);
+        return false;
+      }
+    },
+    [
+      address,
+      stake,
+      txFlow,
+      onConfirm,
+      stETH,
+      txModalStages,
+      isAA,
+      featureFlags.holidayDecorEnabled,
+      bells,
+      onRetry,
+    ],
+  );
+};
