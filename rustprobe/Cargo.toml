@@ -1,0 +1,12 @@
+[package]
+name = "rustprobe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+smallvec = "=1.6.0"
+regex = "=1.5.4"
+hyper = { version = "=0.14.9", features = ["server", "http1", "tcp"] }
+tokio = { version = "=1.8.0", features = ["rt", "net"] }
+crossbeam-deque = "=0.7.3"
+chrono = "=0.4.19"
