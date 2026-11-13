@@ -176,7 +176,7 @@ jobs:
           #
           # The last two flags are kept in reach_flags, because the second attempt
           # below runs the same command without them.
-          reach_flags=(--reach --reach-disable-analytics)
+          reach_flags=() # timing test only: reachability off
           scan() {
             socketcli --scm github \
               --owner "$GITHUB_REPOSITORY_OWNER" \
