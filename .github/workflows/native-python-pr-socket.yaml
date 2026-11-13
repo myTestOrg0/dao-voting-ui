@@ -1,6 +1,4 @@
-# Socket dependency scan for pull requests. Prototype of the central workflow in
-# lidofinance/actions: the only intended difference is that the scanner lock file is
-# read from this repository instead of the central one.
+# Socket dependency scan for pull requests, selected from an organization ruleset.
 #
 # What it does: scans every dependency manifest at the PR head (the whole branch,
 # not only the lines the PR changed), lists every Warn/Block finding in one PR
@@ -12,8 +10,8 @@
 #    compares two scans, and its comment lists only findings that are new in that
 #    comparison. Comparing with an empty scan makes every finding new, so the whole
 #    snapshot is reported. Each run creates its own empty scan in the same Socket
-#    repository, from a directory the PR cannot write to. Nothing is shared between
-#    runs or repositories, so a run never depends on a scan from an earlier run.
+#    repository, before the PR is checked out. Nothing is shared between runs or
+#    repositories, so a run never depends on a scan from an earlier run.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
 #    Forcing one supported action keeps every PR event on the same scan path.
 # 3. Reachability with a fallback. The scan first runs with --reach, which analyses
@@ -64,6 +62,16 @@ jobs:
           echo '::error::Socket Python CLI 2.11.13 cannot scan merge_group events. Add merge queue support before enforcing this workflow on repositories that use a merge queue.'
           exit 2
 
+      - name: Check out the scanner lock file from the central repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The only difference from lidofinance/actions: in this test repository the
+          # workflow and the lock file live in the repository itself.
+          repository: myTestOrg0/dao-voting-ui
+          ref: ${{ github.workflow_sha }} # same commit as this workflow file
+          path: tooling
+          persist-credentials: false
+
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -74,33 +82,14 @@ jobs:
         with:
           node-version: '22' # the engine needs 22.13 or newer
 
-      - name: Check out the PR head
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.SCAN_COMMIT }}
-          path: candidate
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Install the hash-pinned Socket CLI
         run: |
           python -m pip install --require-hashes --only-binary=:all: \
-            -r candidate/.github/tools/socket-python-cli.lock
+            -r tooling/.github/tools/socket-python-cli.lock
           socketcli --version
           node --version
           npm --version
           uv --version
-
-      - name: Remove reachability facts files supplied by the PR
-        # The CLI uploads every .socket.facts.json it finds, and Socket lowers
-        # findings based on that data. A pull request must not be able to supply it.
-        working-directory: candidate
-        run: |
-          find . -path ./.git -prune -o \( -type f -o -type l \) -name '.socket.facts.json*' -print0 |
-            while IFS= read -r -d '' file; do
-              echo "::warning::Ignoring a reachability facts file committed to the repository: $file"
-              rm -f -- "$file"
-            done
 
       - name: Create the empty baseline scan
         id: baseline
@@ -144,6 +133,25 @@ jobs:
           fi
           echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
           echo "org=$org" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SCAN_COMMIT }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Remove reachability facts files supplied by the PR
+        # The CLI uploads every .socket.facts.json it finds, and Socket lowers
+        # findings based on that data. A pull request must not be able to supply it.
+        working-directory: candidate
+        run: |
+          find . -path ./.git -prune -o \( -type f -o -type l \) -name '.socket.facts.json*' -print0 |
+            while IFS= read -r -d '' file; do
+              echo "::warning::Ignoring a reachability facts file committed to the repository: $file"
+              rm -f -- "$file"
+            done
 
       - name: Scan the PR snapshot and update the PR comment
         working-directory: candidate
