@@ -1,4 +1,4 @@
-// Uses smallvec and regex. hyper, tokio, crossbeam-deque and chrono are
+// Uses smallvec and regex. hyper, tokio, rustc-serialize and chrono are
 // declared in Cargo.toml but never used.
 use smallvec::SmallVec;
 
