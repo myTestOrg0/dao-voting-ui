@@ -39,7 +39,7 @@ permissions:
   pull-requests: write # the CLI creates and updates its own PR comment
 
 concurrency:
-  group: socket-${{ github.event.pull_request.number || github.ref }}
+  group: socket-timing-test-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -176,7 +176,9 @@ jobs:
           #
           # The last two flags are kept in reach_flags, because the second attempt
           # below runs the same command without them.
-          reach_flags=() # timing test only: reachability off
+          # TIMING TEST ONLY (this branch): run the same scan with several option sets.
+          nproc; free -g | sed -n 2p; mkdir -p "$RUNNER_TEMP/timing"
+          reach_flags=()
           scan() {
             socketcli --scm github \
               --owner "$GITHUB_REPOSITORY_OWNER" \
@@ -195,20 +197,26 @@ jobs:
               "${reach_flags[@]}"
           }
 
-          status=0
-          scan || status=$?
-
-          # Exit 3 without a report: the first attempt failed before it assessed
-          # anything, most often in the reachability analysis. Scan again without it.
-          if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ]; then
-            echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
-            touch "$RUNNER_TEMP/socket/reachability-fallback"
+          variant() {
+            name="$1"; shift
+            reach_flags=("$@")
             find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
-            reach_flags=()
-            status=0
-            scan || status=$?
-          fi
-          exit "$status"
+            rm -f "$RUNNER_TEMP/socket/report.json"
+            start=$SECONDS
+            echo "TIMING-BEGIN $name $(date -u +%T)"
+            rc=0
+            scan > "$RUNNER_TEMP/timing/log-$name.txt" 2>&1 || rc=$?
+            echo "TIMING-END $name exit=$rc seconds=$((SECONDS - start))"
+            grep -E 'Downloading|has [0-9]+ vulnerab|not possible|Preparing to run|Running (import|full) reach|Reachability analysis completed|Creating new full scan|Total time to create|Diff report URL|timed out|[Tt]imeout|Vulns|Reach=|│|\|.*npm' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-200 | head -60 || true
+          }
+          variant default        --reach --reach-disable-analytics
+          variant concurrency4   --reach --reach-disable-analytics --reach-concurrency 4
+          variant minhigh        --reach --reach-disable-analytics --reach-min-severity high
+          variant conc4-minhigh  --reach --reach-disable-analytics --reach-concurrency 4 --reach-min-severity high
+          variant noreach
+          variant debug          --reach --reach-disable-analytics --reach-debug
+          echo "DEBUG-PROFILE"; grep -iE "took|duration|elapsed| ms|seconds|install|pack|download|analy|bucket|worker|heap|memory" "$RUNNER_TEMP/timing/log-debug.txt" | grep -viE "token|key|authorization|secret" | cut -c1-220 | head -200 || true
+          exit 0
 
       - name: Confirm that the scan really assessed this commit
         # A green scan step is not enough: the CLI exits 0 when it skips the
