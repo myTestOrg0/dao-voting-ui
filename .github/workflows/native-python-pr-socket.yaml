@@ -185,7 +185,7 @@ jobs:
           }
 
           status=0
-          scan --reach --reach-ecosystems npm,golang --reach-disable-analytics || status=$?
+          scan --reach --reach-disable-analytics --reach-debug || status=$?
 
           # Exit 3 without a report: the first attempt failed before it assessed
           # anything, most often in the reachability analysis. Scan again without it.
