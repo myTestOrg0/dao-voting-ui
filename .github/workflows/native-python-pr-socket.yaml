@@ -153,6 +153,12 @@ jobs:
               rm -f -- "$file"
             done
 
+      - name: TIMING TEST ONLY - keep the reachability engine between runs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/socket/coana
+          key: socket-coana-15.14.2-linux-x64
+
       - name: Scan the PR snapshot and update the PR comment
         working-directory: candidate
         env:
@@ -216,10 +222,6 @@ jobs:
           echo "ENGINE-DIRS"
           sudo du -sm "$HOME/.npm" "$HOME/.socket" "$HOME/.coana" "$HOME/.cache" "$HOME/.local/share" /tmp 2>/dev/null || true
           ls -la "$HOME" | cut -c1-120 || true
-          variant concurrency4   --reach --reach-disable-analytics --reach-concurrency 4
-          variant minhigh        --reach --reach-disable-analytics --reach-min-severity high
-          variant conc4-minhigh  --reach --reach-disable-analytics --reach-concurrency 4 --reach-min-severity high
-          variant noreach
           exit 0
 
       - name: Confirm that the scan really assessed this commit
