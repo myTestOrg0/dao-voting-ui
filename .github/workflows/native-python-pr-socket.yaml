@@ -44,8 +44,35 @@ concurrency:
 
 jobs:
   scan:
-    name: Socket dependency security
-    runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
+    name: Socket dependency security (${{ matrix.variant }}, run ${{ matrix.rep }})
+    runs-on: ${{ matrix.runner }}
+    # TIMING TEST ONLY: every variant runs in its own job, three times.
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        rep: [1, 2, 3]
+        variant: [current, noreach, target, target-npm, target-arm]
+        include:
+          - variant: current
+            runner: ubuntu-24.04
+            flags: --reach --reach-disable-analytics
+          - variant: noreach
+            runner: ubuntu-24.04
+            flags: ''
+          - variant: target
+            runner: ubuntu-24.04
+            flags: --reach --reach-disable-analytics --reach-concurrency NPROC --reach-min-severity high
+            engine_cache: true
+          - variant: target-npm
+            runner: ubuntu-24.04
+            flags: --reach --reach-disable-analytics --reach-concurrency NPROC --reach-min-severity high
+            engine_cache: true
+            npm_cache: true
+          - variant: target-arm
+            runner: ubuntu-24.04-arm
+            flags: --reach --reach-disable-analytics --reach-concurrency NPROC --reach-min-severity high
+            engine_cache: true
     timeout-minutes: 30
     defaults:
       run:
@@ -154,10 +181,18 @@ jobs:
             done
 
       - name: TIMING TEST ONLY - keep the reachability engine between runs
+        if: matrix.engine_cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/socket/coana
-          key: socket-coana-15.14.2-linux-x64
+          key: socket-coana-15.14.2-${{ runner.os }}-${{ runner.arch }}
+
+      - name: TIMING TEST ONLY - keep the npm download cache between runs
+        if: matrix.npm_cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: socket-npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/**/yarn.lock') }}
 
       - name: Scan the PR snapshot and update the PR comment
         working-directory: candidate
@@ -165,6 +200,8 @@ jobs:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
           GH_API_TOKEN: ${{ github.token }}
           EVENT_ACTION: synchronize
+          VARIANT_NAME: ${{ matrix.variant }}
+          VARIANT_FLAGS: ${{ matrix.flags }}
           # Set explicitly so that no .env file can redirect the API key elsewhere.
           BASE_API_URL: https://api.socket.dev/v0
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
@@ -216,12 +253,8 @@ jobs:
             grep -E 'Downloading|has [0-9]+ vulnerab|not possible|Preparing to run|Running (import|full) reach|Reachability analysis completed|Creating new full scan|Total time to create|Diff report URL|timed out|[Tt]imeout|Vulns|Reach=|│|\|.*npm' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-200 | head -60 || true
           }
           touch "$RUNNER_TEMP/timing/marker"
-          variant default        --reach --reach-disable-analytics
-          echo "ENGINE-FILES (new files over 5 MB after the first scan, outside the workspace)"
-          sudo find / -xdev -type f -size +5M -newer "$RUNNER_TEMP/timing/marker" -not -path '/proc/*' -not -path "$GITHUB_WORKSPACE/*" 2>/dev/null | head -40 || true
-          echo "ENGINE-DIRS"
-          sudo du -sm "$HOME/.npm" "$HOME/.socket" "$HOME/.coana" "$HOME/.cache" "$HOME/.local/share" /tmp 2>/dev/null || true
-          ls -la "$HOME" | cut -c1-120 || true
+          read -r -a flags <<< "${VARIANT_FLAGS//NPROC/$(nproc)}"
+          variant "$VARIANT_NAME" "${flags[@]}"
           exit 0
 
       - name: Confirm that the scan really assessed this commit
@@ -298,6 +331,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: socket-report
+          name: socket-report-${{ matrix.variant }}-${{ matrix.rep }}
           path: ${{ runner.temp }}/socket/
           retention-days: 7
