@@ -46,33 +46,29 @@ jobs:
   scan:
     name: Socket dependency security (${{ matrix.variant }}, run ${{ matrix.rep }})
     runs-on: ${{ matrix.runner }}
-    # TIMING TEST ONLY: every variant runs in its own job, three times.
+    # TIMING TEST ONLY: every variant runs in its own job, twice, with CPU and memory sampling.
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 2
       matrix:
-        rep: [1, 2, 3]
-        variant: [current, noreach, target, target-npm, target-arm]
+        rep: [1, 2]
+        variant: [current, conc, minhigh, target, noreach]
         include:
           - variant: current
             runner: ubuntu-24.04
             flags: --reach --reach-disable-analytics
-          - variant: noreach
+          - variant: conc
             runner: ubuntu-24.04
-            flags: ''
+            flags: --reach --reach-disable-analytics --reach-concurrency NPROC
+          - variant: minhigh
+            runner: ubuntu-24.04
+            flags: --reach --reach-disable-analytics --reach-min-severity high
           - variant: target
             runner: ubuntu-24.04
             flags: --reach --reach-disable-analytics --reach-concurrency NPROC --reach-min-severity high
-            engine_cache: true
-          - variant: target-npm
+          - variant: noreach
             runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-concurrency NPROC --reach-min-severity high
-            engine_cache: true
-            npm_cache: true
-          - variant: target-arm
-            runner: ubuntu-24.04-arm
-            flags: --reach --reach-disable-analytics --reach-concurrency NPROC --reach-min-severity high
-            engine_cache: true
+            flags: ''
     timeout-minutes: 30
     defaults:
       run:
@@ -185,20 +181,6 @@ jobs:
               rm -f -- "$file"
             done
 
-      - name: TIMING TEST ONLY - keep the reachability engine between runs
-        if: matrix.engine_cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/socket/coana
-          key: socket-coana-15.14.2-${{ runner.os }}-${{ runner.arch }}
-
-      - name: TIMING TEST ONLY - keep the npm download cache between runs
-        if: matrix.npm_cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.npm
-          key: socket-npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/**/yarn.lock') }}
-
       - name: Scan the PR snapshot and update the PR comment
         working-directory: candidate
         env:
@@ -253,8 +235,32 @@ jobs:
             start=$SECONDS
             echo "TIMING-BEGIN $name $(date -u +%T)"
             rc=0
+            # Sample the whole machine once a second: CPU counters and free memory.
+            snap() { awk '/^cpu /{print $2+$3, $4+$7+$8, $6, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat; }
+            ( while :; do echo "$(snap) $(awk '/MemAvailable/{print $2}' /proc/meminfo) $(date +%s)"; sleep 1; done ) > "$RUNNER_TEMP/timing/res-$name.txt" &
+            sampler=$!
             scan > "$RUNNER_TEMP/timing/log-$name.txt" 2>&1 || rc=$?
+            kill "$sampler" 2>/dev/null || true
             echo "TIMING-END $name exit=$rc seconds=$((SECONDS - start))"
+            # stats <label> <from epoch> <to epoch>: CPU and memory of the whole machine in that window
+            stats() {
+              awk -v n="$(nproc)" -v tot="$(awk '/MemTotal/{print $2}' /proc/meminfo)" -v label="$1" -v from="$2" -v to="$3" '
+                $6<from || $6>to {next}
+                !k {u0=$1; s0=$2; w0=$3; t0=$4; m0=$5; minm=$5; e0=$6}
+                k  {du=$1-pu; ds=$2-ps; dt=$4-pt; if (dt>0) {b=(du+ds)/dt*100; if (b>peak) peak=b}}
+                   {k++; pu=$1; ps=$2; pt=$4; if ($5<minm) minm=$5; u1=$1; s1=$2; w1=$3; t1=$4; e1=$6}
+                END {if (!k) {print "RESOURCES " label " no-samples"; exit}
+                     dt=t1-t0; if (dt<=0) dt=1;
+                     printf "RESOURCES %s seconds=%d cores=%d ram_mb=%d cpu_avg_pct=%.0f cpu_peak_pct=%.0f cores_busy_avg=%.2f user_pct=%.0f sys_pct=%.0f iowait_pct=%.0f mem_used_start_mb=%d mem_used_peak_mb=%d mem_peak_pct=%.0f\n",
+                       label, e1-e0, n, tot/1024, (u1-u0+s1-s0)/dt*100, peak, (u1-u0+s1-s0)/dt*n, (u1-u0)/dt*100, (s1-s0)/dt*100, (w1-w0)/dt*100, (tot-m0)/1024, (tot-minm)/1024, (tot-minm)/tot*100}' "$RUNNER_TEMP/timing/res-$name.txt"
+            }
+            stats "$name whole-scan-step" 0 9999999999
+            # Analysis window: from the first "Running full reachability analysis" to "Reachability analysis completed".
+            t_from="$(grep -m1 'Running full reachability analysis' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-19 || true)"
+            t_to="$(grep -m1 'Reachability analysis completed' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-19 || true)"
+            if [ -n "$t_from" ] && [ -n "$t_to" ]; then
+              stats "$name analysis-only" "$(date -d "$t_from" +%s)" "$(date -d "$t_to" +%s)"
+            fi
             grep -E 'Downloading|has [0-9]+ vulnerab|not possible|Preparing to run|Running (import|full) reach|Reachability analysis completed|Creating new full scan|Total time to create|Diff report URL|ERROR|Traceback|status code|timed out|[Tt]imeout|Vulns|Reach=|│|\|.*npm' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-200 | head -60 || true
           }
           touch "$RUNNER_TEMP/timing/marker"
