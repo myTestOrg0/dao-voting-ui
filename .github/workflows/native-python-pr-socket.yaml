@@ -75,9 +75,9 @@ jobs:
         shell: bash
     env:
       SCAN_REPO: ${{ github.event.repository.name }}
-      # TIMING TEST ONLY: the scanned code is the fork myTestOrg0/csm-widget at a fixed commit.
-      SCAN_BRANCH: timing-csm-widget
-      SCAN_COMMIT: 31243a3cb1b9d94814b0ff3a874a19dcf43dd2c0
+      # TIMING TEST ONLY: the scanned code is the fork myTestOrg0/dao-voting-ui at a fixed commit.
+      SCAN_BRANCH: timing-dao-voting-ui
+      SCAN_COMMIT: 79f467601f20f9e6cf300ffbc312c1fa6d493ee1
       PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - name: Fail on merge queue events (not supported yet)
@@ -166,7 +166,7 @@ jobs:
       - name: Check out the PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: myTestOrg0/csm-widget
+          repository: myTestOrg0/dao-voting-ui
           ref: ${{ env.SCAN_COMMIT }}
           path: candidate
           fetch-depth: 0
