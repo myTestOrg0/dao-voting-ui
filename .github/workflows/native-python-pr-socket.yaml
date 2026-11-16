@@ -49,10 +49,10 @@ jobs:
     # TIMING TEST ONLY: every variant runs in its own job, twice, with CPU and memory sampling.
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
       matrix:
-        rep: [1, 2]
-        variant: [current, conc, minhigh, target, noreach]
+        rep: [1, 2, 3, 4, 5, 6]
+        variant: [current]
         include:
           - variant: current
             runner: ubuntu-24.04
@@ -235,6 +235,8 @@ jobs:
             start=$SECONDS
             echo "TIMING-BEGIN $name $(date -u +%T)"
             rc=0
+            echo "HOST $name cpu_model=$(lscpu | sed -n 's/^Model name: *//p' | head -1 | tr ' ' '_') mhz=$(lscpu | sed -n 's/^CPU MHz: *//p;s/^BogoMIPS: *//p' | head -1)"
+            steal0="$(awk '/^cpu /{print $9, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat)"
             # Sample the whole machine once a second: CPU counters and free memory.
             snap() { awk '/^cpu /{print $2+$3, $4+$7+$8, $6, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat; }
             ( while :; do echo "$(snap) $(awk '/MemAvailable/{print $2}' /proc/meminfo) $(date +%s)"; sleep 1; done ) > "$RUNNER_TEMP/timing/res-$name.txt" &
@@ -254,6 +256,8 @@ jobs:
                      printf "RESOURCES %s seconds=%d cores=%d ram_mb=%d cpu_avg_pct=%.0f cpu_peak_pct=%.0f cores_busy_avg=%.2f user_pct=%.0f sys_pct=%.0f iowait_pct=%.0f mem_used_start_mb=%d mem_used_peak_mb=%d mem_peak_pct=%.0f\n",
                        label, e1-e0, n, tot/1024, (u1-u0+s1-s0)/dt*100, peak, (u1-u0+s1-s0)/dt*n, (u1-u0)/dt*100, (s1-s0)/dt*100, (w1-w0)/dt*100, (tot-m0)/1024, (tot-minm)/1024, (tot-minm)/tot*100}' "$RUNNER_TEMP/timing/res-$name.txt"
             }
+            echo "$steal0 $(awk '/^cpu /{print $9, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat)" | awk -v name="$name" '{printf "STEAL %s steal_pct=%.1f\n", name, ($3-$1)/($4-$2)*100}'
+            grep -E 'Analysis of .* completed|│ +[0-9]+ │' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-200 || true
             stats "$name whole-scan-step" 0 9999999999
             # Analysis window: from the first "Running full reachability analysis" to "Reachability analysis completed".
             t_from="$(grep -m1 'Running full reachability analysis' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-19 || true)"
