@@ -20,8 +20,11 @@
 #    Accepted risk: for Rust the engine runs build scripts from the PR, and for
 #    Python it builds packages that have no wheel. That code runs in a step that
 #    holds the Socket token and the job's GitHub token.
-#    An analysis that is cut short can still exit 0 with fewer findings. The
-#    workflow cannot detect that.
+#    The --reach-continue-on-* flags keep the analysis going when one project
+#    cannot be analysed. Those findings keep the precomputed result, and the
+#    job summary lists what was not analysed.
+#    The engine version is pinned, and the hashes of the engine are checked
+#    before and after the scan.
 # 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
 #    failure is safer than a green check that scanned nothing.
 #
