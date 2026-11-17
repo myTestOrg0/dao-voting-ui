@@ -56,16 +56,16 @@ jobs:
         include:
           - variant: current
             runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-no-source-files
+            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-install-errors
           - variant: conc
             runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-no-source-files --reach-concurrency NPROC
+            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-install-errors --reach-concurrency NPROC
           - variant: minhigh
             runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-no-source-files --reach-min-severity high
+            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-install-errors --reach-min-severity high
           - variant: target
             runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-no-source-files --reach-concurrency NPROC --reach-min-severity high
+            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-install-errors --reach-concurrency NPROC --reach-min-severity high
           - variant: noreach
             runner: ubuntu-24.04
             flags: ''
@@ -75,9 +75,9 @@ jobs:
         shell: bash
     env:
       SCAN_REPO: ${{ github.event.repository.name }}
-      # TIMING TEST ONLY: the scanned code is the fork myTestOrg0/core at a fixed commit.
-      SCAN_BRANCH: timing-core
-      SCAN_COMMIT: 2bd532298d85cdf520169fdc0c5fb0cc9baf03c3
+      # TIMING TEST ONLY: the scanned code is the fork myTestOrg0/lido-oracle at a fixed commit.
+      SCAN_BRANCH: timing-lido-oracle
+      SCAN_COMMIT: 7d772da0c5a05c284490a5e0962ae40b38d768ed
       PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - name: Fail on merge queue events (not supported yet)
@@ -166,7 +166,7 @@ jobs:
       - name: Check out the PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: myTestOrg0/core
+          repository: myTestOrg0/lido-oracle
           ref: ${{ env.SCAN_COMMIT }}
           path: candidate
           fetch-depth: 0
