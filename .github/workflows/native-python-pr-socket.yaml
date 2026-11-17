@@ -236,14 +236,21 @@ jobs:
               "${reach_flags[@]}"
           }
 
+          # The first attempt is also kept in a file: if it fails, the reason the
+          # engine gave goes to the job summary.
           status=0
-          scan || status=$?
+          scan 2>&1 | tee "$RUNNER_TEMP/socket/first-attempt.log" || status=$?
 
           # Exit 3 without a report: the first attempt failed before it assessed
           # anything, most often in the reachability analysis. Scan again without it.
           if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ]; then
             echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
             touch "$RUNNER_TEMP/socket/reachability-fallback"
+            # From the engine's "error:" line to the CLI's own failure line, without colours.
+            sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/socket/first-attempt.log" |
+              awk '/ error: /{on=1} /Reachability analysis failed/{exit} on' |
+              sed -E 's/^[0-9-]+ [0-9:.,]+ - //' | grep -v '^[[:space:]]*$' | head -n 20 \
+              > "$RUNNER_TEMP/socket/reachability-error.txt" || true
             find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
             reach_flags=()
             status=0
@@ -329,6 +336,15 @@ jobs:
             echo '## Socket dependency scan'
             if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
               echo 'The scan with reachability analysis produced no report. These findings are reported without it.'
+              if [ -s "$RUNNER_TEMP/socket/reachability-error.txt" ]; then
+                echo
+                echo 'Reason given by the reachability engine:'
+                echo '```text'
+                cat "$RUNNER_TEMP/socket/reachability-error.txt"
+                echo '```'
+              else
+                echo 'The engine gave no reason. See the log of the scan step.'
+              fi
             fi
             if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
               echo '```text'
