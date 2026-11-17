@@ -1,0 +1,342 @@
+# Socket dependency scan for pull requests, selected from an organization ruleset.
+#
+# What it does: scans every dependency manifest at the PR head (the whole branch,
+# not only the lines the PR changed), lists every Warn/Block finding in one PR
+# comment, and fails the job when the organization policy says Block.
+#
+# Four things here are not obvious:
+#
+# 1. Empty baseline scan. Socket Python CLI 2.11.13 only gates and comments when it
+#    compares two scans, and its comment lists only findings that are new in that
+#    comparison. Comparing with an empty scan makes every finding new, so the whole
+#    snapshot is reported. Each run creates its own empty scan in the same Socket
+#    repository, before the PR is checked out. Nothing is shared between runs or
+#    repositories, so a run never depends on a scan from an earlier run.
+# 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
+#    Forcing one supported action keeps every PR event on the same scan path.
+# 3. Reachability with a fallback. The scan first runs with --reach, which analyses
+#    the code and lowers findings that cannot be reached. If the first attempt
+#    exits 3 without a report, the step scans again without --reach.
+#    Accepted risk: for Rust the engine runs build scripts from the PR, and for
+#    Python it builds packages that have no wheel. That code runs in a step that
+#    holds the Socket token and the job's GitHub token.
+#    An analysis that is cut short can still exit 0 with fewer findings. The
+#    workflow cannot detect that.
+# 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
+#    failure is safer than a green check that scanned nothing.
+#
+# Exit codes of the scan step: 0 = no Block (Warn is allowed), 1 = Block finding,
+# 3 = Socket API or runtime error.
+
+name: Socket
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: write # the CLI creates and updates its own PR comment
+
+concurrency:
+  group: socket-timing-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Socket dependency security (${{ matrix.variant }}, run ${{ matrix.rep }})
+    runs-on: ${{ matrix.runner }}
+    # TIMING TEST ONLY: every variant runs in its own job, twice, with CPU and memory sampling.
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        # TIMING TEST ONLY: six runs of the scan with the flags of the prototype.
+        rep: [1, 2, 3, 4, 5, 6]
+        variant: [current]
+        include:
+          - variant: current
+            runner: ubuntu-24.04
+            flags: --reach --reach-disable-analytics --reach-version 15.14.2 --reach-continue-on-no-source-files --reach-continue-on-install-errors --reach-continue-on-missing-lock-files --reach-continue-on-analysis-errors
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      SCAN_REPO: ${{ github.event.repository.name }}
+      # TIMING TEST ONLY: the scanned code is the fork myTestOrg0/lido-oracle at a fixed commit.
+      SCAN_BRANCH: timing-avg-oracle
+      SCAN_COMMIT: 7d772da0c5a05c284490a5e0962ae40b38d768ed
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Fail on merge queue events (not supported yet)
+        if: github.event_name == 'merge_group'
+        run: |
+          echo '::error::Socket Python CLI 2.11.13 cannot scan merge_group events. Add merge queue support before enforcing this workflow on repositories that use a merge queue.'
+          exit 2
+
+      - name: Check out the scanner lock file from the central repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The only difference from lidofinance/actions: in this test repository the
+          # workflow and the lock file live in the repository itself.
+          repository: myTestOrg0/dao-voting-ui
+          ref: ${{ github.workflow_sha }} # same commit as this workflow file
+          path: tooling
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js for the reachability engine
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22' # the engine needs 22.13 or newer
+
+      - name: Install the hash-pinned Socket CLI
+        run: |
+          if [ "$RUNNER_ARCH" = ARM64 ]; then
+            # TIMING TEST ONLY: the lock file has x86_64 hashes only.
+            python -m pip install --only-binary=:all: socketsecurity==2.11.13 uv==0.13.8
+          else
+            python -m pip install --require-hashes --only-binary=:all: \
+              -r tooling/.github/tools/socket-python-cli.lock
+          fi
+          socketcli --version
+          node --version
+          npm --version
+          uv --version
+
+      - name: Create the empty baseline scan
+        id: baseline
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          BASE_API_URL: https://api.socket.dev/v0
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event (fork and Dependabot PRs need a separate decision)}"
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
+          cd "$RUNNER_TEMP/socket-empty"
+
+          # The API accepts only known manifest names. An empty facts document is
+          # the placeholder the CLI itself uses for an empty scan.
+          echo '{"components": []}' > .socket.facts.json
+
+          # curl reads the API key from stdin, so the key never appears in a
+          # process argument list.
+          socket_api() {
+            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 60 -K - "$@"
+          }
+
+          org="$(socket_api "$BASE_API_URL/organizations" |
+            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
+          if [ -z "$org" ]; then
+            echo '::error::The Socket API key must belong to exactly one organization.'
+            exit 3
+          fi
+
+          # tmp=true keeps this service scan out of the Socket dashboard. The CLI
+          # has no flag for it, so this one request goes to the API directly.
+          socket_api -X POST \
+            -F '.socket.facts.json=@.socket.facts.json' \
+            "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" \
+            > "$RUNNER_TEMP/socket/baseline.json"
+
+          scan_id="$(jq -r '.id // empty' "$RUNNER_TEMP/socket/baseline.json")"
+          if [ -z "$scan_id" ]; then
+            echo '::error::Socket did not return the ID of the empty baseline scan.'
+            exit 3
+          fi
+          echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
+          echo "org=$org" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: myTestOrg0/lido-oracle
+          ref: ${{ env.SCAN_COMMIT }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Remove reachability facts files supplied by the PR
+        # The CLI uploads every .socket.facts.json it finds, and Socket lowers
+        # findings based on that data. A pull request must not be able to supply it.
+        working-directory: candidate
+        run: |
+          find . -path ./.git -prune -o \( -type f -o -type l \) -name '.socket.facts.json*' -print0 |
+            while IFS= read -r -d '' file; do
+              echo "::warning::Ignoring a reachability facts file committed to the repository: $file"
+              rm -f -- "$file"
+            done
+
+      - name: Scan the PR snapshot and update the PR comment
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          GH_API_TOKEN: ${{ github.token }}
+          EVENT_ACTION: synchronize
+          VARIANT_NAME: ${{ matrix.variant }}
+          VARIANT_FLAGS: ${{ matrix.flags }}
+          # Set explicitly so that no .env file can redirect the API key elsewhere.
+          BASE_API_URL: https://api.socket.dev/v0
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          # The reachability engine downloads packages with npm. It must never run
+          # their install scripts in this step, which holds both tokens.
+          NPM_CONFIG_IGNORE_SCRIPTS: 'true'
+        run: |
+          # --base-scan-id        compare with the empty baseline: every finding is new
+          # --ignore-commit-files scan even when the PR touches no manifest file
+          # --strict-blocking     fail on any Block, not only on new ones
+          # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
+          # --disable-overview    one security comment, no second overview comment
+          # --reach               analyse the code and lower findings that are not reachable
+          # --reach-disable-analytics  do not send analysis statistics to Socket
+          #
+          # The last two flags are kept in reach_flags, because the second attempt
+          # below runs the same command without them.
+          # TIMING TEST ONLY (this branch): run the same scan with several option sets.
+          nproc; free -g | sed -n 2p; mkdir -p "$RUNNER_TEMP/timing"
+          reach_flags=()
+          scan() {
+            socketcli --scm github \
+              --owner "$GITHUB_REPOSITORY_OWNER" \
+              --repo "$SCAN_REPO" \
+              --branch "$SCAN_BRANCH" \
+              --commit-sha "$SCAN_COMMIT" \
+              --pr-number "$PR_NUMBER" \
+              --target-path . \
+              --base-scan-id "$BASELINE_SCAN_ID" \
+              --ignore-commit-files \
+              --strict-blocking \
+              --disable-ignore \
+              --disable-overview \
+              --json-file "$RUNNER_TEMP/socket/report.json" \
+              --summary-file "$RUNNER_TEMP/socket/summary.txt" \
+              "${reach_flags[@]}"
+          }
+
+          variant() {
+            name="$1"; shift
+            reach_flags=("$@")
+            find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
+            rm -f "$RUNNER_TEMP/socket/report.json"
+            start=$SECONDS
+            echo "TIMING-BEGIN $name $(date -u +%T)"
+            rc=0
+            echo "HOST $name cpu_model=$(lscpu | sed -n 's/^Model name: *//p' | head -1 | tr ' ' '_') mhz=$(lscpu | sed -n 's/^CPU MHz: *//p;s/^BogoMIPS: *//p' | head -1)"
+            steal0="$(awk '/^cpu /{print $9, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat)"
+            # Sample the whole machine once a second: CPU counters and free memory.
+            snap() { awk '/^cpu /{print $2+$3, $4+$7+$8, $6, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat; }
+            ( while :; do echo "$(snap) $(awk '/MemAvailable/{print $2}' /proc/meminfo) $(date +%s)"; sleep 1; done ) > "$RUNNER_TEMP/timing/res-$name.txt" &
+            sampler=$!
+            scan > "$RUNNER_TEMP/timing/log-$name.txt" 2>&1 || rc=$?
+            kill "$sampler" 2>/dev/null || true
+            echo "TIMING-END $name exit=$rc seconds=$((SECONDS - start))"
+            # stats <label> <from epoch> <to epoch>: CPU and memory of the whole machine in that window
+            stats() {
+              awk -v n="$(nproc)" -v tot="$(awk '/MemTotal/{print $2}' /proc/meminfo)" -v label="$1" -v from="$2" -v to="$3" '
+                $6<from || $6>to {next}
+                !k {u0=$1; s0=$2; w0=$3; t0=$4; m0=$5; minm=$5; e0=$6}
+                k  {du=$1-pu; ds=$2-ps; dt=$4-pt; if (dt>0) {b=(du+ds)/dt*100; if (b>peak) peak=b}}
+                   {k++; pu=$1; ps=$2; pt=$4; if ($5<minm) minm=$5; u1=$1; s1=$2; w1=$3; t1=$4; e1=$6}
+                END {if (!k) {print "RESOURCES " label " no-samples"; exit}
+                     dt=t1-t0; if (dt<=0) dt=1;
+                     printf "RESOURCES %s seconds=%d cores=%d ram_mb=%d cpu_avg_pct=%.0f cpu_peak_pct=%.0f cores_busy_avg=%.2f user_pct=%.0f sys_pct=%.0f iowait_pct=%.0f mem_used_start_mb=%d mem_used_peak_mb=%d mem_peak_pct=%.0f\n",
+                       label, e1-e0, n, tot/1024, (u1-u0+s1-s0)/dt*100, peak, (u1-u0+s1-s0)/dt*n, (u1-u0)/dt*100, (s1-s0)/dt*100, (w1-w0)/dt*100, (tot-m0)/1024, (tot-minm)/1024, (tot-minm)/tot*100}' "$RUNNER_TEMP/timing/res-$name.txt"
+            }
+            echo "$steal0 $(awk '/^cpu /{print $9, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat)" | awk -v name="$name" '{printf "STEAL %s steal_pct=%.1f\n", name, ($3-$1)/($4-$2)*100}'
+            grep -E 'Analysis of .* completed|│ +[0-9]+ │' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-200 || true
+            stats "$name whole-scan-step" 0 9999999999
+            # Analysis window: from the first "Running full reachability analysis" to "Reachability analysis completed".
+            t_from="$(grep -m1 'Running full reachability analysis' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-19 || true)"
+            t_to="$(grep -m1 'Reachability analysis completed' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-19 || true)"
+            if [ -n "$t_from" ] && [ -n "$t_to" ]; then
+              stats "$name analysis-only" "$(date -d "$t_from" +%s)" "$(date -d "$t_to" +%s)"
+            fi
+            grep -E 'Downloading|has [0-9]+ vulnerab|not possible|Preparing to run|Running (import|full) reach|Reachability analysis completed|Creating new full scan|Total time to create|Diff report URL|ERROR|Traceback|status code|timed out|[Tt]imeout|Vulns|Reach=|│|\|.*npm' "$RUNNER_TEMP/timing/log-$name.txt" | cut -c1-200 | head -60 || true
+          }
+          touch "$RUNNER_TEMP/timing/marker"
+          read -r -a flags <<< "${VARIANT_FLAGS//NPROC/$(nproc)}"
+          variant "$VARIANT_NAME" "${flags[@]}"
+          exit 0
+
+      - name: Confirm that the scan really assessed this commit
+        # A green scan step is not enough: the CLI exits 0 when it skips the
+        # comparison. Runs after a Block failure too, but not after a cancel.
+        if: github.event_name == 'pull_request' && !cancelled()
+        env:
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          SOCKET_ORG: ${{ steps.baseline.outputs.org }}
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          BASE_API_URL: https://api.socket.dev/v0
+        run: |
+          report="$RUNNER_TEMP/socket/report.json"
+          not_scanned() {
+            echo "::error::Treat this PR as not scanned: $1."
+            exit 3
+          }
+
+          [ -n "$BASELINE_SCAN_ID" ] ||
+            not_scanned 'no empty baseline scan was created'
+          [ -s "$report" ] ||
+            not_scanned 'the CLI wrote no report'
+          # .scan_failed is not checked: the CLI sets it to true for a Block finding.
+          jq -e '.full_scan_id | length > 0' "$report" > /dev/null ||
+            not_scanned 'the report has no scan ID'
+          jq -e --arg commit "$SCAN_COMMIT" '.commit_sha == $commit' "$report" > /dev/null ||
+            not_scanned 'the report belongs to another commit'
+
+          # Ask Socket for the comparison itself. The CLI report does not say which
+          # scans were compared or whether the comparison was complete.
+          # Both answers are kept next to the report and uploaded with it. curl
+          # retries timeouts and 408/429/5xx answers, not 401/403/404.
+          socket_api() {
+            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 60 --retry 2 --retry-delay 5 -K - "$@"
+          }
+          head_scan="$(jq -r '.full_scan_id' "$report")"
+          comparisons="$RUNNER_TEMP/socket/comparison-list.json"
+          comparison="$RUNNER_TEMP/socket/comparison.json"
+
+          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" > "$comparisons" ||
+            not_scanned 'Socket did not list the comparison'
+          comparison_id="$(jq -r 'if (.results | length) == 1 then .results[0].id else empty end' "$comparisons")"
+          [ -n "$comparison_id" ] ||
+            not_scanned 'Socket has no single comparison of this scan with the empty baseline scan'
+          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$comparison_id?if_cached=true" > "$comparison" ||
+            not_scanned 'Socket did not return the comparison'
+          jq -e --arg base "$BASELINE_SCAN_ID" --arg head "$head_scan" \
+            '.diff_scan.before_full_scan.id == $base and .diff_scan.after_full_scan.id == $head' "$comparison" > /dev/null ||
+            not_scanned 'the comparison used other scans'
+          jq -e '.diff_scan.incomplete == false' "$comparison" > /dev/null ||
+            not_scanned 'Socket did not confirm that the comparison is complete'
+
+      - name: Publish the job summary
+        if: always()
+        run: |
+          {
+            echo '## Socket dependency scan'
+            if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
+              echo 'The scan with reachability analysis produced no report. These findings are reported without it.'
+            fi
+            if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
+              echo '```text'
+              # GitHub rejects step summaries above 1 MiB.
+              head -c 900000 "$RUNNER_TEMP/socket/summary.txt"
+              echo
+              echo '```'
+            else
+              echo 'No completed assessment. See the failed step.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: socket-report-${{ matrix.variant }}-${{ matrix.rep }}
+          path: ${{ runner.temp }}/socket/
+          retention-days: 7
