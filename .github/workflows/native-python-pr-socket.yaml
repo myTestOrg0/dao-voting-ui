@@ -51,33 +51,22 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
+        # TIMING TEST ONLY: six runs of the scan with the flags of the prototype.
         rep: [1, 2, 3, 4, 5, 6]
         variant: [current]
         include:
           - variant: current
             runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-install-errors
-          - variant: conc
-            runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-install-errors --reach-concurrency NPROC
-          - variant: minhigh
-            runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-install-errors --reach-min-severity high
-          - variant: target
-            runner: ubuntu-24.04
-            flags: --reach --reach-disable-analytics --reach-additional-params=--reach-continue-on-install-errors --reach-concurrency NPROC --reach-min-severity high
-          - variant: noreach
-            runner: ubuntu-24.04
-            flags: ''
+            flags: --reach --reach-disable-analytics --reach-version 15.14.2 --reach-continue-on-no-source-files --reach-continue-on-install-errors --reach-continue-on-missing-lock-files --reach-continue-on-analysis-errors
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
     env:
       SCAN_REPO: ${{ github.event.repository.name }}
-      # TIMING TEST ONLY: the scanned code is the fork myTestOrg0/lido-oracle at a fixed commit.
-      SCAN_BRANCH: timing-lido-oracle
-      SCAN_COMMIT: 7d772da0c5a05c284490a5e0962ae40b38d768ed
+      # TIMING TEST ONLY: the scanned code is the fork myTestOrg0/dao-voting-ui at a fixed commit.
+      SCAN_BRANCH: timing-avg-dao
+      SCAN_COMMIT: 79f467601f20f9e6cf300ffbc312c1fa6d493ee1
       PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - name: Fail on merge queue events (not supported yet)
@@ -166,7 +155,7 @@ jobs:
       - name: Check out the PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: myTestOrg0/lido-oracle
+          repository: myTestOrg0/dao-voting-ui
           ref: ${{ env.SCAN_COMMIT }}
           path: candidate
           fetch-depth: 0
