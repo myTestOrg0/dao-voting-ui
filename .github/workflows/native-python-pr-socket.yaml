@@ -46,7 +46,7 @@ jobs:
   scan:
     name: Socket dependency security
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
-    timeout-minutes: 30
+    timeout-minutes: 10 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the job
     defaults:
       run:
         shell: bash
@@ -55,6 +55,12 @@ jobs:
       SCAN_BRANCH: ${{ github.head_ref }}
       SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
+      # The reachability engine (Coana CLI). The Socket CLI has a flag for the
+      # version only, so the two hashes are checked by this workflow. Update all
+      # three values together with the CLI lock file.
+      REACH_ENGINE_VERSION: 15.14.2
+      REACH_ENGINE_CLI_SHA256: 196b4c90b5761e29ec76a9371d401cea49e50779bb72ea99c699f7bee7cc51bd
+      REACH_ENGINE_ANALYZERS_SHA256: 9426f0811b5e657d5d29cf8c7df11ed0c12bee20747bfb3763cd86b7a52968b7
     steps:
       - name: Fail on merge queue events (not supported yet)
         if: github.event_name == 'merge_group'
@@ -134,6 +140,25 @@ jobs:
           echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
           echo "org=$org" >> "$GITHUB_OUTPUT"
 
+      - name: Check the hash Socket announces for the reachability engine
+        # Before any engine code runs: the CLI downloads the engine by the hash
+        # that this same endpoint returns.
+        env:
+          SOCKET_ORG: ${{ steps.baseline.outputs.org }}
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          BASE_API_URL: https://api.socket.dev/v0
+        run: |
+          announced="$(printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+            curl -fsS --max-time 60 --retry 2 --retry-delay 5 -K - -X POST \
+              -H 'content-type: application/json' \
+              -d "{\"version\":\"$REACH_ENGINE_VERSION\",\"components\":[\"cli\"]}" \
+              "$BASE_API_URL/orgs/$SOCKET_ORG/coana-cli/artifacts" |
+            jq -r '.components.cli.sha256 // empty')"
+          if [ "$announced" != "$REACH_ENGINE_CLI_SHA256" ]; then
+            echo "::error::Socket announces reachability engine $REACH_ENGINE_VERSION with SHA-256 '$announced', the workflow pins $REACH_ENGINE_CLI_SHA256."
+            exit 3
+          fi
+
       - name: Check out the PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -184,7 +209,7 @@ jobs:
           reach_flags=(
             --reach
             --reach-disable-analytics
-            --reach-version 15.14.2
+            --reach-version "$REACH_ENGINE_VERSION"
             --reach-continue-on-no-source-files
             --reach-continue-on-install-errors
             --reach-continue-on-missing-lock-files
@@ -222,6 +247,26 @@ jobs:
             scan || status=$?
           fi
           exit "$status"
+
+      - name: Check the hashes of the reachability engine that ran
+        # The CLI and the engine record the SHA-256 of what they downloaded.
+        if: github.event_name == 'pull_request' && !cancelled()
+        run: |
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/socket/coana/v1/versions/$REACH_ENGINE_VERSION"
+          failed=0
+          for part in cli analyzers; do
+            [ "$part" = cli ] && pinned="$REACH_ENGINE_CLI_SHA256" || pinned="$REACH_ENGINE_ANALYZERS_SHA256"
+            if [ ! -s "$cache/$part" ]; then
+              echo "::warning::The reachability engine part '$part' was not downloaded in this run."
+              continue
+            fi
+            actual="$(tr -d '[:space:]' < "$cache/$part")"
+            if [ "$actual" != "$pinned" ]; then
+              echo "::error::Reachability engine part '$part' has SHA-256 $actual, the workflow pins $pinned."
+              failed=1
+            fi
+          done
+          [ "$failed" -eq 0 ] || exit 3
 
       - name: Confirm that the scan really assessed this commit
         # A green scan step is not enough: the CLI exits 0 when it skips the
@@ -292,6 +337,35 @@ jobs:
               echo 'No completed assessment. See the failed step.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report what the reachability analysis could not analyse
+        # With the --reach-continue-on-* flags a problem in one project no longer
+        # fails the scan. This step makes it visible instead.
+        if: github.event_name == 'pull_request' && !cancelled()
+        run: |
+          facts=candidate/.socket.facts.json
+          [ -s "$facts" ] || exit 0
+          cp "$facts" "$RUNNER_TEMP/socket/reachability-facts.json"
+          results="$(jq -r '[.components[]?.reachability[]?.reachability[]?.type] | group_by(.) | map("| \(.[0]) | \(length) |") | .[]' "$facts")"
+          errors="$(jq -r '[.components[]?.reachability[]?.reachability[]? | select(.type == "error") | .error // "no message"] | group_by(.) | map("\(length) vulnerabilities: \(.[0])") | .[]' "$facts")"
+          problems="$(jq -r '.workspaceDiagnostics[]? | . as $w | .diagnostics.warnings[]? | select(.severity != "info") | "\($w.purl_type) project \($w.subprojectPath): \(.message)"' "$facts")"
+          {
+            echo '## Reachability analysis'
+            echo '| Result | Vulnerabilities |'
+            echo '|---|---|'
+            echo "$results"
+            if [ -n "$errors$problems" ]; then
+              echo
+              echo 'Not analysed in the code. These findings keep the precomputed result:'
+              echo '```text'
+              [ -z "$errors" ] || echo "$errors"
+              [ -z "$problems" ] || echo "$problems"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$errors$problems" ]; then
+            echo "::warning::Reachability analysis skipped part of the code. See the job summary."
+          fi
 
       - name: Upload scan results
         if: always()
