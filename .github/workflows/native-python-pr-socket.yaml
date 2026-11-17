@@ -173,10 +173,23 @@ jobs:
           # --disable-overview    one security comment, no second overview comment
           # --reach               analyse the code and lower findings that are not reachable
           # --reach-disable-analytics  do not send analysis statistics to Socket
+          # --reach-version       the engine version; the same one this CLI release pins
+          # --reach-continue-on-* do not stop the analysis when a project has no source
+          #                       files, a dependency or a lock file is missing, or one
+          #                       analysis fails. The findings it could not analyse get
+          #                       the precomputed result. Hidden in --help of CLI 2.11.13.
           #
-          # The last two flags are kept in reach_flags, because the second attempt
+          # The reachability flags are kept in reach_flags, because the second attempt
           # below runs the same command without them.
-          reach_flags=(--reach --reach-disable-analytics)
+          reach_flags=(
+            --reach
+            --reach-disable-analytics
+            --reach-version 15.14.2
+            --reach-continue-on-no-source-files
+            --reach-continue-on-install-errors
+            --reach-continue-on-missing-lock-files
+            --reach-continue-on-analysis-errors
+          )
           scan() {
             socketcli --scm github \
               --owner "$GITHUB_REPOSITORY_OWNER" \
