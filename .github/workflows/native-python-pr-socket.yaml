@@ -89,7 +89,7 @@ jobs:
       - name: Create the empty baseline scan
         id: baseline
         env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_TEST_SECRET_THAT_DOES_NOT_EXIST }}
         run: |
           : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event}"
           mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
