@@ -9,7 +9,8 @@
 # 1. Empty baseline scan. Socket Python CLI 2.11.13 gates and comments only on
 #    findings that are new between two scans. Each run compares the PR with its
 #    own empty scan, so every finding is new and the whole snapshot is reported.
-# 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
+# 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on a reopened
+#    PR. Forcing one supported action keeps every PR event on the same scan path.
 # 3. Reachability with a fallback. The scan runs with --reach, which lowers
 #    findings the code cannot reach. If that attempt exits 3 without a report,
 #    the step scans again without --reach.
@@ -59,8 +60,8 @@ jobs:
       - name: Check out the scanner lock file from the central repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The only difference from lidofinance/actions: in this test repository the
-          # workflow and the lock file live in the repository itself.
+          # In this test repository the workflow and the lock file live in the
+          # repository itself. The central workflow reads them from lidofinance/actions.
           repository: myTestOrg0/dao-voting-ui
           ref: ${{ github.workflow_sha }} # same commit as this workflow file
           path: tooling
