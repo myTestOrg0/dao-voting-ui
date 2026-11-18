@@ -1,0 +1,137 @@
+# TEST STAND: can Trivy read a PRIVATE VEX repository (myTestOrg0/vexel-private)
+# using a token from a GitHub secret, while scanning the image built from this repo?
+#
+# Required secret: VEX_REPO_TOKEN — read-only access to myTestOrg0/vexel-private
+#   (fine-grained PAT: resource owner myTestOrg0, only vexel-private, Contents: Read-only;
+#    or a GitHub App installation token with contents:read on that repo).
+#
+# Marker: vexel-private marks CVE-2026-14456 (alpine libcrypto3/libssl3) as not_affected.
+# Success = the CVE is active in the baseline scan and suppressed by the VEX scan
+#           with Source "VEX Repository: vexel-private".
+name: Trivy private VEX repo test
+
+on:
+  push:
+    branches: [test/trivy-private-vex]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRIVY_VERSION: 0.76.2
+  TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+  IMAGE: dao-voting-ui:trivy-vex-stand
+  VEX_REPO_URL: https://github.com/myTestOrg0/vexel-private
+  MARKER_CVE: CVE-2026-14456
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: |
+          docker build -t "$IMAGE" .
+          docker save -o "$RUNNER_TEMP/image.tar" "$IMAGE"
+
+      - name: Install Trivy (pinned, checksum-verified)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLo trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  trivy.tgz" | sha256sum -c -
+          tar xzf trivy.tgz trivy
+          sudo install -m 0755 trivy /usr/local/bin/trivy
+          trivy --version
+
+      - name: Configure VEX repository (private repo only, no default VEX Hub)
+        run: |
+          mkdir -p "$HOME/.trivy/vex"
+          cat > "$HOME/.trivy/vex/repository.yaml" <<YAML
+          repositories:
+            - name: vexel-private
+              url: ${VEX_REPO_URL}
+              enabled: true
+          YAML
+          trivy vex repo list
+
+      - name: "Negative check: without token the private repo must NOT be readable"
+        env:
+          GITHUB_TOKEN: ""
+        run: |
+          if trivy vex repo download --cache-dir "$RUNNER_TEMP/cache-notoken"; then
+            echo "::error::VEX repo was downloaded WITHOUT a token — is ${VEX_REPO_URL} really private?"
+            exit 1
+          fi
+          echo "OK: anonymous access denied"
+
+      - name: Check secret is set
+        env:
+          VEX_REPO_TOKEN: ${{ secrets.VEX_REPO_TOKEN }}
+        run: |
+          if [ -z "$VEX_REPO_TOKEN" ]; then
+            echo "::error::Secret VEX_REPO_TOKEN is not set (needs contents:read on myTestOrg0/vexel-private)"
+            exit 1
+          fi
+
+      - name: Download private VEX repo with token
+        env:
+          # Trivy's GitHub downloader uses GITHUB_TOKEN for both the manifest (contents API)
+          # and the archive download. Scoped to this step only.
+          GITHUB_TOKEN: ${{ secrets.VEX_REPO_TOKEN }}
+        run: |
+          trivy vex repo download --cache-dir "$RUNNER_TEMP/cache"
+          ls -la "$RUNNER_TEMP/cache/vex/repositories/vexel-private/0.1"
+
+      - name: Baseline scan (no VEX)
+        run: |
+          trivy image --input "$RUNNER_TEMP/image.tar" --cache-dir "$RUNNER_TEMP/cache" \
+            --scanners vuln --format json -o baseline.json
+
+      - name: Scan with private VEX repo
+        run: |
+          # Repo already in cache; set skip-update so this step needs no token.
+          trivy image --input "$RUNNER_TEMP/image.tar" --cache-dir "$RUNNER_TEMP/cache" \
+            --scanners vuln --vex repo --skip-vex-repo-update --show-suppressed \
+            --format json -o with-vex.json
+          trivy convert --format table with-vex.json --severity HIGH,CRITICAL | tail -40 || true
+
+      - name: Assert VEX from private repo was applied
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          cve = os.environ["MARKER_CVE"]
+          def load(f): return json.load(open(f)).get("Results", [])
+          base = [(v["PkgName"]) for r in load("baseline.json") for v in (r.get("Vulnerabilities") or []) if v["VulnerabilityID"] == cve]
+          act  = [(v["PkgName"]) for r in load("with-vex.json") for v in (r.get("Vulnerabilities") or []) if v["VulnerabilityID"] == cve]
+          sup  = [(m["Finding"]["PkgName"], m["Status"], m["Source"]) for r in load("with-vex.json")
+                  for m in (r.get("ExperimentalModifiedFindings") or []) if m["Finding"].get("VulnerabilityID") == cve]
+          lines = [f"## Trivy private VEX repo test — {cve}", "",
+                   f"- baseline (no VEX): active in {base or 'NONE'}",
+                   f"- with `--vex repo`: active in {act or 'none'}",
+                   f"- suppressed: {sup or 'NONE'}"]
+          ok = bool(base) and not act and sup and all("vexel-private" in s[2] for s in sup)
+          lines.append("")
+          lines.append("**RESULT: PASS — Trivy read the private VEX repo**" if ok else "**RESULT: FAIL**")
+          if not base:
+              lines.append(f"> {cve} not present in baseline (base image changed?) — test inconclusive, pick another marker CVE.")
+          out = "\n".join(lines)
+          print(out)
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(out + "\n")
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-reports
+          path: |
+            baseline.json
+            with-vex.json
+          if-no-files-found: ignore
