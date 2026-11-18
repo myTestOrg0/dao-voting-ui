@@ -213,7 +213,7 @@ jobs:
         # comparison. Runs after a Block failure too, but not after a cancel.
         if: github.event_name == 'pull_request' && !cancelled()
         env:
-          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          BASELINE_SCAN_ID: 00000000-0000-4000-8000-000000000000
           SOCKET_ORG: ${{ steps.baseline.outputs.org }}
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: |
