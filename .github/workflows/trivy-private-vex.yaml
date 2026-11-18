@@ -4,6 +4,8 @@
 # Required secret: VEX_REPO_TOKEN — read-only access to myTestOrg0/vexel-private
 #   (fine-grained PAT: resource owner myTestOrg0, only vexel-private, Contents: Read-only;
 #    or a GitHub App installation token with contents:read on that repo).
+# vexel-private's manifest points to https://api.github.com/repos/.../tarball/main
+#   (the github.com/.../archive URL does not accept fine-grained PATs).
 #
 # Marker: vexel-private marks CVE-2026-14456 (alpine libcrypto3/libssl3) as not_affected.
 # Success = the CVE is active in the baseline scan and suppressed by the VEX scan
@@ -81,11 +83,19 @@ jobs:
 
       - name: Download private VEX repo with token
         env:
-          # Trivy's GitHub downloader uses GITHUB_TOKEN for both the manifest (contents API)
-          # and the archive download. Scoped to this step only.
-          GITHUB_TOKEN: ${{ secrets.VEX_REPO_TOKEN }}
+          VEX_REPO_TOKEN: ${{ secrets.VEX_REPO_TOKEN }}
         run: |
-          trivy vex repo download --cache-dir "$RUNNER_TEMP/cache"
+          # The manifest lists an api.github.com tarball URL: github.com/.../archive/*.tar.gz
+          # rejects fine-grained PATs (404). Trivy uses env GITHUB_TOKEN only for host github.com,
+          # so for api.github.com the token must be the per-repo `token:` in repository.yaml.
+          # Write it only for this step, then drop it from the config.
+          CFG="$HOME/.trivy/vex/repository.yaml"
+          cp "$CFG" "$RUNNER_TEMP/repository.yaml.notoken"
+          umask 077
+          printf '    token: "%s"\n' "$VEX_REPO_TOKEN" >> "$CFG"
+          rc=0; trivy vex repo download --cache-dir "$RUNNER_TEMP/cache" || rc=$?
+          cp "$RUNNER_TEMP/repository.yaml.notoken" "$CFG"
+          [ "$rc" -eq 0 ] || exit "$rc"
           ls -la "$RUNNER_TEMP/cache/vex/repositories/vexel-private/0.1"
 
       - name: Baseline scan (no VEX)
