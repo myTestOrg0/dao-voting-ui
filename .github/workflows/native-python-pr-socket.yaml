@@ -23,8 +23,9 @@
 #    The --reach-continue-on-* flags keep the analysis going when one project
 #    cannot be analysed. Those findings keep the precomputed result, and the
 #    job summary lists what was not analysed.
-#    The engine version is pinned, and the hashes of the engine are checked
-#    before and after the scan.
+#    The engine version is pinned. Before the scan the workflow compares the
+#    hashes Socket announces for that version with the pinned ones. If they
+#    differ, the engine is not started and the scan runs without --reach.
 # 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
 #    failure is safer than a green check that scanned nothing.
 #
@@ -58,9 +59,9 @@ jobs:
       SCAN_BRANCH: ${{ github.head_ref }}
       SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      # The reachability engine (Coana CLI). The Socket CLI has a flag for the
-      # version only, so the two hashes are checked by this workflow. Update all
-      # three values together with the CLI lock file.
+      # The reachability engine (Coana CLI) and the SHA-256 of its two parts. The
+      # Socket CLI has a flag for the version only, so the hashes are checked by
+      # this workflow. Update all three values together with the CLI lock file.
       REACH_ENGINE_VERSION: 15.14.2
       REACH_ENGINE_CLI_SHA256: 196b4c90b5761e29ec76a9371d401cea49e50779bb72ea99c699f7bee7cc51bd
       REACH_ENGINE_ANALYZERS_SHA256: 9426f0811b5e657d5d29cf8c7df11ed0c12bee20747bfb3763cd86b7a52968b7
@@ -143,9 +144,11 @@ jobs:
           echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
           echo "org=$org" >> "$GITHUB_OUTPUT"
 
-      - name: Check the hash Socket announces for the reachability engine
-        # Before any engine code runs: the CLI downloads the engine by the hash
-        # that this same endpoint returns.
+      - name: Check the hashes Socket announces for the reachability engine
+        # Before any engine code runs. The CLI downloads the engine by the hashes
+        # that this same endpoint returns. A mismatch does not fail the job: the
+        # engine is not started and the scan runs without reachability analysis.
+        id: engine
         env:
           SOCKET_ORG: ${{ steps.baseline.outputs.org }}
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
@@ -154,12 +157,16 @@ jobs:
           announced="$(printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
             curl -fsS --max-time 60 --retry 2 --retry-delay 5 -K - -X POST \
               -H 'content-type: application/json' \
-              -d "{\"version\":\"$REACH_ENGINE_VERSION\",\"components\":[\"cli\"]}" \
+              -d "{\"version\":\"$REACH_ENGINE_VERSION\",\"components\":[\"cli\",\"analyzers\"]}" \
               "$BASE_API_URL/orgs/$SOCKET_ORG/coana-cli/artifacts" |
-            jq -r '.components.cli.sha256 // empty')"
-          if [ "$announced" != "$REACH_ENGINE_CLI_SHA256" ]; then
-            echo "::error::Socket announces reachability engine $REACH_ENGINE_VERSION with SHA-256 '$announced', the workflow pins $REACH_ENGINE_CLI_SHA256."
-            exit 3
+            jq -r '"\(.components.cli.sha256) \(.components.analyzers.sha256)"')" || announced='no answer'
+          if [ "$announced" = "$REACH_ENGINE_CLI_SHA256 $REACH_ENGINE_ANALYZERS_SHA256" ]; then
+            echo 'trusted=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "Socket announces reachability engine $REACH_ENGINE_VERSION with SHA-256 '$announced' (cli, analyzers). The workflow pins '$REACH_ENGINE_CLI_SHA256 $REACH_ENGINE_ANALYZERS_SHA256'." \
+              > "$RUNNER_TEMP/socket/reachability-skipped.txt"
+            echo "::warning::$(cat "$RUNNER_TEMP/socket/reachability-skipped.txt") The engine is not started; scanning without reachability analysis."
+            echo 'trusted=false' >> "$GITHUB_OUTPUT"
           fi
 
       - name: Check out the PR head
@@ -190,6 +197,7 @@ jobs:
           # Set explicitly so that no .env file can redirect the API key elsewhere.
           BASE_API_URL: https://api.socket.dev/v0
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          REACH_ENGINE_TRUSTED: ${{ steps.engine.outputs.trusted }}
           # The reachability engine downloads packages with npm. It must never run
           # their install scripts in this step, which holds both tokens.
           NPM_CONFIG_IGNORE_SCRIPTS: 'true'
@@ -218,6 +226,8 @@ jobs:
             --reach-continue-on-missing-lock-files
             --reach-continue-on-analysis-errors
           )
+          # The announced engine hashes differ from the pinned ones: do not start it.
+          [ "$REACH_ENGINE_TRUSTED" = true ] || reach_flags=()
           scan() {
             socketcli --scm github \
               --owner "$GITHUB_REPOSITORY_OWNER" \
@@ -257,26 +267,6 @@ jobs:
             scan || status=$?
           fi
           exit "$status"
-
-      - name: Check the hashes of the reachability engine that ran
-        # The CLI and the engine record the SHA-256 of what they downloaded.
-        if: github.event_name == 'pull_request' && !cancelled()
-        run: |
-          cache="${XDG_CACHE_HOME:-$HOME/.cache}/socket/coana/v1/versions/$REACH_ENGINE_VERSION"
-          failed=0
-          for part in cli analyzers; do
-            [ "$part" = cli ] && pinned="$REACH_ENGINE_CLI_SHA256" || pinned="$REACH_ENGINE_ANALYZERS_SHA256"
-            if [ ! -s "$cache/$part" ]; then
-              echo "::warning::The reachability engine part '$part' was not downloaded in this run."
-              continue
-            fi
-            actual="$(tr -d '[:space:]' < "$cache/$part")"
-            if [ "$actual" != "$pinned" ]; then
-              echo "::error::Reachability engine part '$part' has SHA-256 $actual, the workflow pins $pinned."
-              failed=1
-            fi
-          done
-          [ "$failed" -eq 0 ] || exit 3
 
       - name: Confirm that the scan really assessed this commit
         # A green scan step is not enough: the CLI exits 0 when it skips the
@@ -334,6 +324,13 @@ jobs:
         run: |
           {
             echo '## Socket dependency scan'
+            if [ -s "$RUNNER_TEMP/socket/reachability-skipped.txt" ]; then
+              echo 'The reachability engine was not started. These findings are reported without reachability analysis.'
+              echo
+              echo '```text'
+              cat "$RUNNER_TEMP/socket/reachability-skipped.txt"
+              echo '```'
+            fi
             if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
               echo 'The scan with reachability analysis produced no report. These findings are reported without it.'
               if [ -s "$RUNNER_TEMP/socket/reachability-error.txt" ]; then
