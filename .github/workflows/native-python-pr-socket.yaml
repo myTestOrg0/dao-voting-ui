@@ -37,7 +37,7 @@ jobs:
   scan:
     name: Socket dependency security
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
-    timeout-minutes: 10 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the job
+    timeout-minutes: 12 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the job
     defaults:
       run:
         shell: bash
