@@ -57,6 +57,8 @@ jobs:
       SCAN_BRANCH: ${{ github.head_ref }}
       SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
+      # Set explicitly so that no .env file in the PR can redirect the API key elsewhere.
+      BASE_API_URL: https://api.socket.dev/v0
       # The reachability engine (Coana CLI) and the SHA-256 of its two parts. The
       # Socket CLI has a flag for the version only, so the hashes are checked by
       # this workflow. Update all three values together with the CLI lock file.
@@ -103,9 +105,8 @@ jobs:
         id: baseline
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-          BASE_API_URL: https://api.socket.dev/v0
         run: |
-          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event (fork and Dependabot PRs need a separate decision)}"
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event}"
           mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
           cd "$RUNNER_TEMP/socket-empty"
 
@@ -150,7 +151,6 @@ jobs:
         env:
           SOCKET_ORG: ${{ steps.baseline.outputs.org }}
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-          BASE_API_URL: https://api.socket.dev/v0
         run: |
           announced="$(printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
             curl -fsS --max-time 60 --retry 2 --retry-delay 5 -K - -X POST \
@@ -192,8 +192,6 @@ jobs:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
           GH_API_TOKEN: ${{ github.token }}
           EVENT_ACTION: synchronize
-          # Set explicitly so that no .env file can redirect the API key elsewhere.
-          BASE_API_URL: https://api.socket.dev/v0
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
           REACH_ENGINE_TRUSTED: ${{ steps.engine.outputs.trusted }}
           # The reachability engine downloads packages with npm. It must never run
@@ -252,7 +250,7 @@ jobs:
           fi
           exit "$status"
 
-      - name: Confirm that the scan really assessed this commit
+      - name: Confirm that Socket compared the scan with the empty baseline
         # A green scan step is not enough: the CLI exits 0 when it skips the
         # comparison. Runs after a Block failure too, but not after a cancel.
         if: github.event_name == 'pull_request' && !cancelled()
@@ -260,7 +258,6 @@ jobs:
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
           SOCKET_ORG: ${{ steps.baseline.outputs.org }}
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-          BASE_API_URL: https://api.socket.dev/v0
         run: |
           report="$RUNNER_TEMP/socket/report.json"
           not_scanned() {
