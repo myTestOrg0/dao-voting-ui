@@ -67,7 +67,7 @@ jobs:
       # Socket CLI has a flag for the version only, so the hashes are checked by
       # this workflow. Update all three values together with the CLI lock file.
       REACH_ENGINE_VERSION: 15.14.2
-      REACH_ENGINE_CLI_SHA256: 196b4c90b5761e29ec76a9371d401cea49e50779bb72ea99c699f7bee7cc51bd
+      REACH_ENGINE_CLI_SHA256: 00000000b5761e29ec76a9371d401cea49e50779bb72ea99c699f7bee7cc51bd
       REACH_ENGINE_ANALYZERS_SHA256: 9426f0811b5e657d5d29cf8c7df11ed0c12bee20747bfb3763cd86b7a52968b7
     steps:
       - name: Fail on merge queue events (not supported yet)
