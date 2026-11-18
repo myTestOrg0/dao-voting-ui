@@ -26,8 +26,7 @@
 #    The engine version is pinned. Before the scan the workflow compares the
 #    hashes Socket announces for that version with the pinned ones. If they
 #    differ, the engine is not started and the scan runs without --reach. The
-#    scan result still decides whether the PR can merge; a second job turns red
-#    to show that the pin has to be looked at.
+#    job reports it as an error annotation and in the job summary.
 # 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
 #    failure is safer than a green check that scanned nothing.
 #
@@ -53,8 +52,6 @@ jobs:
     name: Socket dependency security
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
     timeout-minutes: 10 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the job
-    outputs:
-      engine_trusted: ${{ steps.engine.outputs.trusted }}
     defaults:
       run:
         shell: bash
@@ -169,7 +166,7 @@ jobs:
           else
             echo "Socket announces reachability engine $REACH_ENGINE_VERSION with SHA-256 '$announced' (cli, analyzers). The workflow pins '$REACH_ENGINE_CLI_SHA256 $REACH_ENGINE_ANALYZERS_SHA256'." \
               > "$RUNNER_TEMP/socket/reachability-skipped.txt"
-            echo "::warning::$(cat "$RUNNER_TEMP/socket/reachability-skipped.txt") The engine is not started; scanning without reachability analysis."
+            echo "::error::$(cat "$RUNNER_TEMP/socket/reachability-skipped.txt") The engine is not started; scanning without reachability analysis. Check with Socket and update the pin."
             echo 'trusted=false' >> "$GITHUB_OUTPUT"
           fi
 
@@ -394,20 +391,3 @@ jobs:
           name: socket-report
           path: ${{ runner.temp }}/socket/
           retention-days: 7
-
-  engine-pin:
-    # Runs only when the announced engine hashes differ from the pinned ones. The
-    # red job is the signal; continue-on-error keeps it from blocking the PR,
-    # because the scan above already ran without the engine.
-    name: Socket reachability engine pin
-    needs: scan
-    if: always() && needs.scan.outputs.engine_trusted == 'false'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    continue-on-error: true
-    permissions: {}
-    steps:
-      - name: Fail to show that the engine pin needs attention
-        run: |
-          echo '::error::Socket no longer announces the pinned hashes for the reachability engine. The engine was not started and this PR was scanned without reachability analysis. See the job summary of "Socket dependency security", then check with Socket and update the pin.'
-          exit 1
