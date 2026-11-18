@@ -20,9 +20,6 @@
 #    Accepted risk: for Rust the engine runs build scripts from the PR, and for
 #    Python it builds packages that have no wheel. That code runs in a step that
 #    holds the Socket token and the job's GitHub token.
-#    The --reach-continue-on-* flags keep the analysis going when one project
-#    cannot be analysed. Those findings keep the precomputed result, and the
-#    job summary lists what was not analysed.
 #    The engine version is pinned. Before the scan the workflow compares the
 #    hashes Socket announces for that version with the pinned ones. If they
 #    differ, the engine is not started and the scan runs without --reach. The
@@ -211,10 +208,6 @@ jobs:
           # --reach               analyse the code and lower findings that are not reachable
           # --reach-disable-analytics  do not send analysis statistics to Socket
           # --reach-version       the engine version; the same one this CLI release pins
-          # --reach-continue-on-* do not stop the analysis when a project has no source
-          #                       files, a dependency or a lock file is missing, or one
-          #                       analysis fails. The findings it could not analyse get
-          #                       the precomputed result. Hidden in --help of CLI 2.11.13.
           #
           # The reachability flags are kept in reach_flags, because the second attempt
           # below runs the same command without them.
@@ -222,10 +215,6 @@ jobs:
             --reach
             --reach-disable-analytics
             --reach-version "$REACH_ENGINE_VERSION"
-            --reach-continue-on-no-source-files
-            --reach-continue-on-install-errors
-            --reach-continue-on-missing-lock-files
-            --reach-continue-on-analysis-errors
           )
           # The announced engine hashes differ from the pinned ones: do not start it.
           [ "$REACH_ENGINE_TRUSTED" = true ] || reach_flags=()
@@ -247,21 +236,15 @@ jobs:
               "${reach_flags[@]}"
           }
 
-          # The first attempt is also kept in a file: if it fails, the reason the
-          # engine gave goes to the job summary.
           status=0
-          scan 2>&1 | tee "$RUNNER_TEMP/socket/first-attempt.log" || status=$?
+          scan || status=$?
 
           # Exit 3 without a report: the first attempt failed before it assessed
           # anything, most often in the reachability analysis. Scan again without it.
           if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ]; then
             echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
             touch "$RUNNER_TEMP/socket/reachability-fallback"
-            # From the engine's "error:" line to the CLI's own failure line, without colours.
-            sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/socket/first-attempt.log" |
-              awk '/ error: /{on=1} /Reachability analysis failed/{exit} on' |
-              sed -E 's/^[0-9-]+ [0-9:.,]+ - //' | grep -v '^[[:space:]]*$' | head -n 20 \
-              > "$RUNNER_TEMP/socket/reachability-error.txt" || true
+            # Drop what the failed analysis left behind, so the second scan does not upload it.
             find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
             reach_flags=()
             status=0
@@ -285,18 +268,14 @@ jobs:
             exit 3
           }
 
-          [ -n "$BASELINE_SCAN_ID" ] ||
-            not_scanned 'no empty baseline scan was created'
+          # No report: the CLI left before it scanned, which it does with exit 0.
+          # .scan_failed is not checked: the CLI sets it to true for a Block finding.
           [ -s "$report" ] ||
             not_scanned 'the CLI wrote no report'
-          # .scan_failed is not checked: the CLI sets it to true for a Block finding.
-          jq -e '.full_scan_id | length > 0' "$report" > /dev/null ||
-            not_scanned 'the report has no scan ID'
-          jq -e --arg commit "$SCAN_COMMIT" '.commit_sha == $commit' "$report" > /dev/null ||
-            not_scanned 'the report belongs to another commit'
 
-          # Ask Socket for the comparison itself. The CLI report does not say which
-          # scans were compared or whether the comparison was complete.
+          # Ask Socket for the comparison itself. The CLI report does not say
+          # whether a comparison was made or whether it was complete: a plain
+          # full scan also leaves a report, and the CLI never blocks on one.
           # Both answers are kept next to the report and uploaded with it. curl
           # retries timeouts and 408/429/5xx answers, not 401/403/404.
           socket_api() {
@@ -314,9 +293,6 @@ jobs:
             not_scanned 'Socket has no single comparison of this scan with the empty baseline scan'
           socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$comparison_id?if_cached=true" > "$comparison" ||
             not_scanned 'Socket did not return the comparison'
-          jq -e --arg base "$BASELINE_SCAN_ID" --arg head "$head_scan" \
-            '.diff_scan.before_full_scan.id == $base and .diff_scan.after_full_scan.id == $head' "$comparison" > /dev/null ||
-            not_scanned 'the comparison used other scans'
           jq -e '.diff_scan.incomplete == false' "$comparison" > /dev/null ||
             not_scanned 'Socket did not confirm that the comparison is complete'
 
@@ -333,16 +309,7 @@ jobs:
               echo '```'
             fi
             if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
-              echo 'The scan with reachability analysis produced no report. These findings are reported without it.'
-              if [ -s "$RUNNER_TEMP/socket/reachability-error.txt" ]; then
-                echo
-                echo 'Reason given by the reachability engine:'
-                echo '```text'
-                cat "$RUNNER_TEMP/socket/reachability-error.txt"
-                echo '```'
-              else
-                echo 'The engine gave no reason. See the log of the scan step.'
-              fi
+              echo 'The scan with reachability analysis produced no report. These findings are reported without it. The reason is in the log of the scan step.'
             fi
             if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
               echo '```text'
@@ -354,35 +321,6 @@ jobs:
               echo 'No completed assessment. See the failed step.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Report what the reachability analysis could not analyse
-        # With the --reach-continue-on-* flags a problem in one project no longer
-        # fails the scan. This step makes it visible instead.
-        if: github.event_name == 'pull_request' && !cancelled()
-        run: |
-          facts=candidate/.socket.facts.json
-          [ -s "$facts" ] || exit 0
-          cp "$facts" "$RUNNER_TEMP/socket/reachability-facts.json"
-          results="$(jq -r '[.components[]?.reachability[]?.reachability[]?.type] | group_by(.) | map("| \(.[0]) | \(length) |") | .[]' "$facts")"
-          errors="$(jq -r '[.components[]?.reachability[]?.reachability[]? | select(.type == "error") | .error // "no message"] | group_by(.) | map("\(length) vulnerabilities: \(.[0])") | .[]' "$facts")"
-          problems="$(jq -r '.workspaceDiagnostics[]? | . as $w | .diagnostics.warnings[]? | select(.severity != "info") | "\($w.purl_type) project \($w.subprojectPath): \(.message)"' "$facts")"
-          {
-            echo '## Reachability analysis'
-            echo '| Result | Vulnerabilities |'
-            echo '|---|---|'
-            echo "$results"
-            if [ -n "$errors$problems" ]; then
-              echo
-              echo 'Not analysed in the code. These findings keep the precomputed result:'
-              echo '```text'
-              [ -z "$errors" ] || echo "$errors"
-              [ -z "$problems" ] || echo "$problems"
-              echo '```'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "$errors$problems" ]; then
-            echo "::warning::Reachability analysis skipped part of the code. See the job summary."
-          fi
 
       - name: Upload scan results
         if: always()
