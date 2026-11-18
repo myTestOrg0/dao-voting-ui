@@ -1,34 +1,25 @@
 # Socket dependency scan for pull requests, selected from an organization ruleset.
 #
-# What it does: scans every dependency manifest at the PR head (the whole branch,
-# not only the lines the PR changed), lists every Warn/Block finding in one PR
-# comment, and fails the job when the organization policy says Block.
+# Scans every dependency manifest at the PR head (the whole branch, not only the
+# lines the PR changed), lists every Warn/Block finding in one PR comment, and
+# fails the job when the organization policy says Block.
 #
 # Four things here are not obvious:
 #
-# 1. Empty baseline scan. Socket Python CLI 2.11.13 only gates and comments when it
-#    compares two scans, and its comment lists only findings that are new in that
-#    comparison. Comparing with an empty scan makes every finding new, so the whole
-#    snapshot is reported. Each run creates its own empty scan in the same Socket
-#    repository, before the PR is checked out. Nothing is shared between runs or
-#    repositories, so a run never depends on a scan from an earlier run.
+# 1. Empty baseline scan. Socket Python CLI 2.11.13 gates and comments only on
+#    findings that are new between two scans. Each run compares the PR with its
+#    own empty scan, so every finding is new and the whole snapshot is reported.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
-#    Forcing one supported action keeps every PR event on the same scan path.
-# 3. Reachability with a fallback. The scan first runs with --reach, which analyses
-#    the code and lowers findings that cannot be reached. If the first attempt
-#    exits 3 without a report, the step scans again without --reach.
-#    Accepted risk: for Rust the engine runs build scripts from the PR, and for
-#    Python it builds packages that have no wheel. That code runs in a step that
-#    holds the Socket token and the job's GitHub token.
-#    The engine version is pinned. Before the scan the workflow compares the
-#    hashes Socket announces for that version with the pinned ones. If they
-#    differ, the engine is not started and the scan runs without --reach. The
-#    job reports it as an error annotation and in the job summary.
-# 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
-#    failure is safer than a green check that scanned nothing.
+# 3. Reachability with a fallback. The scan runs with --reach, which lowers
+#    findings the code cannot reach. It runs without --reach if that attempt
+#    exits 3 without a report, or if the engine hashes Socket announces differ
+#    from the pinned ones.
+#    Accepted risk: the engine runs Rust build scripts from the PR and builds
+#    Python packages that have no wheel, in the step that holds both tokens.
+# 4. merge_group fails on purpose: the CLI has no merge queue mode.
 #
-# Exit codes of the scan step: 0 = no Block (Warn is allowed), 1 = Block finding,
-# 3 = Socket API or runtime error.
+# Scan step exit codes: 0 = no Block (Warn is allowed), 1 = Block, 3 = Socket API
+# or runtime error.
 
 name: Socket
 
