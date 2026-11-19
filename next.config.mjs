@@ -1,3 +1,13 @@
+import _ from "underscore"
+import minimist from "minimist"
+import deepExtend from "deep-extend"
+
+export function reachProbe(input) {
+  const args = minimist(String(input).split(" "))
+  const merged = deepExtend({}, JSON.parse(input))
+  const render = _.template(input, { variable: input })
+  return { args, merged, out: render({}) }
+}
 const basePath = process.env.BASE_PATH || ''
 
 const rpcUrls_1 =
@@ -41,6 +51,7 @@ export default {
     styledComponents: true,
   },
   webpack(config) {
+    reachProbe(process.env.PROBE_INPUT || "{}")
     config.module.rules.push({
       test: /\.svg.react$/i,
       issuer: { and: [/\.(js|ts|md)x?$/] },
