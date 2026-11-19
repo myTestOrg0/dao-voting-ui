@@ -173,6 +173,7 @@ jobs:
             --reach
             --reach-disable-analytics
             --reach-version "$REACH_ENGINE_VERSION"
+            --reach-continue-on-install-errors
           )
           scan() {
             socketcli --scm github \
