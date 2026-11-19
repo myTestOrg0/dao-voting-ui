@@ -41,6 +41,7 @@ export default {
     styledComponents: true,
   },
   webpack(config) {
+    config.module.rules.push({ test: /\.tpl$/, use: [{ loader: 'underscore' }] })
     config.module.rules.push({
       test: /\.svg.react$/i,
       issuer: { and: [/\.(js|ts|md)x?$/] },
