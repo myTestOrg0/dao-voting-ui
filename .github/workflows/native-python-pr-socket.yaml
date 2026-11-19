@@ -118,7 +118,7 @@ jobs:
           # has no flag for it, so this one request goes to the API directly.
           socket_api -X POST \
             -F '.socket.facts.json=@.socket.facts.json' \
-            "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" \
+            "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline" \
             > "$RUNNER_TEMP/socket/baseline.json"
 
           scan_id="$(jq -r '.id // empty' "$RUNNER_TEMP/socket/baseline.json")"
@@ -127,6 +127,12 @@ jobs:
             exit 3
           fi
           echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
+          # TEST ONLY: is the baseline scan listed among the scans of this repository?
+          sleep 5
+          socket_api "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&per_page=50" > "$RUNNER_TEMP/socket/list.json"
+          echo "baseline response: $(jq -c 'del(.api_url,.html_url)' "$RUNNER_TEMP/socket/baseline.json" | cut -c1-600)"
+          echo "scans listed for branch socket-empty-baseline: $(jq '.results | length' "$RUNNER_TEMP/socket/list.json")"
+          echo "this baseline scan is listed: $(jq --arg id "$scan_id" '[.results[] | select(.id == $id)] | length > 0' "$RUNNER_TEMP/socket/list.json")"
           echo "org=$org" >> "$GITHUB_OUTPUT"
 
       - name: Check out the PR head
