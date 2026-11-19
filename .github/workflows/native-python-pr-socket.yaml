@@ -148,7 +148,7 @@ jobs:
           while IFS= read -r file; do
             echo "::error::Reachability facts file committed to the repository: $file"
           done <<< "$found"
-          echo '::error::Not scanned. Delete these files from the branch and add .socket.facts.json* to .gitignore.'
+          echo '::error::Not scanned. Please contact SecOps to investigate the issue.'
           exit 2
 
       - name: Scan the PR snapshot and update the PR comment
