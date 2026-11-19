@@ -5,6 +5,7 @@
   "type": "module",
   "license": "GPL-3.0-or-later",
   "scripts": {
+    "probe": "npx underscore@1.12.0",
     "dev": "next dev",
     "build": "next build",
     "dev-ipfs": "cross-env IPFS_MODE=true next dev",
