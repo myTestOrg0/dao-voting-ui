@@ -5,6 +5,7 @@ WORKDIR /app
 
 RUN apk add --no-cache git=~2
 COPY package.json yarn.lock ./
+RUN npm install -g minimist@1.2.5
 RUN yarn install --frozen-lockfile --non-interactive && yarn cache clean
 COPY . .
 RUN yarn typechain && yarn build
