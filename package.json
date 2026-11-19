@@ -5,11 +5,12 @@
   "type": "module",
   "license": "GPL-3.0-or-later",
   "scripts": {
+    "probe": "node -e \"require('minimist')(process.argv)\"",
     "dev": "next dev",
     "build": "next build",
     "dev-ipfs": "cross-env IPFS_MODE=true next dev",
     "build-ipfs": "cross-env IPFS_MODE=true next build && next export",
-    "start": "NODE_OPTIONS='-r next-logger' next start",
+    "start": "NODE_OPTIONS='-r next-logger -r deep-extend' next start",
     "lint": "eslint --ext ts,tsx,js,jsx .",
     "lint:dockerfile": "dockerfilelint Dockerfile",
     "lint:fix": "yarn lint --fix",
@@ -25,6 +26,9 @@
     ]
   },
   "dependencies": {
+    "underscore": "1.12.0",
+    "minimist": "1.2.5",
+    "deep-extend": "0.4.1",
     "@lidofinance/evm-script-decoder": "0.2.3",
     "@lidofinance/lido-ui": "^3.31.0",
     "@lidofinance/next-cache-files-middleware": "^0.33.0",
