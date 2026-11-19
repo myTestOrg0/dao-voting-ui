@@ -214,6 +214,12 @@ jobs:
           fi
           exit "$status"
 
+      - name: Keep the reachability engine output (test only)
+        if: always()
+        run: |
+          cp candidate/.socket.facts.json "$RUNNER_TEMP/socket/socket-facts.json" 2>/dev/null || echo "no facts file"
+          cp /tmp/coana-cli-*/coana-log.txt "$RUNNER_TEMP/socket/" 2>/dev/null || echo "no engine log"
+
       - name: Confirm that Socket compared the scan with the empty baseline
         # A green scan step is not enough: the CLI exits 0 when it skips the
         # comparison. Runs after a Block failure too, but not after a cancel.
