@@ -1,0 +1,152 @@
+## Setup
+
+There are two ways to run the project locally for development:
+1. Using Docker  
+2. Directly on the host system
+
+Using Docker allows you to develop in an environment that closely mirrors production, while also providing an extra layer of system security.
+
+### Docker
+
+1. Install Docker  
+2. Prepare environment file:
+
+```bash
+cp .env.example .env
+# edit .env with your endpoints / addresses
+```
+
+3. Run the command `make up` to build the image and start the container. (`make` is likely already installed on your system as a standard build tool on Unix-like environments. If not, you can [download it here](https://www.gnu.org/software/make/).)  
+4. Run `make install-pre-commit` to install pre-commit hooks. The hook will be installed on your host machine, but tests and linting will run inside the container.
+5. To run sidecars stack (Postgres + init-db + performance services), use `make sidecars-up`
+
+You can find the full list of available Make commands [here](https://github.com/lidofinance/lido-oracle/blob/develop/Makefile).
+
+### Local Setup
+
+1. [Install Poetry](https://python-poetry.org/docs/#installation)  
+2. Install the project dependencies:
+
+```bash
+poetry install
+```
+
+3. Fetch and build the [blst](https://github.com/supranational/blst) BLS bindings (vendored as a git submodule; requires `swig` and a C++ compiler on `PATH`):
+
+```bash
+git submodule update --init
+poetry run sh scripts/build_blst.sh
+```
+
+4. Install pre-commit hooks
+
+```bash
+poetry run pre-commit install
+```
+
+## Startup
+
+The easiest way to run locally is to keep a `.env` file in the repo root:
+
+```bash
+cp .env.example .env
+```
+
+And load it into your shell before running the module:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+### Required variables
+
+#### Accounting / Ejector / Check
+
+These modules require `LIDO_LOCATOR_ADDRESS` in addition to RPC endpoints:
+
+```bash
+export EXECUTION_CLIENT_URI=...
+export CONSENSUS_CLIENT_URI=...
+export KEYS_API_URI=...
+export LIDO_LOCATOR_ADDRESS=...
+```
+
+#### Staking Module Oracle (CSM/CM)
+
+```bash
+export EXECUTION_CLIENT_URI=...
+export CONSENSUS_CLIENT_URI=...
+export KEYS_API_URI=...
+
+export STAKING_MODULE_ADDRESS=...  # staking module contract address (for `csm`/`csm_0x02`/`cm`)
+
+export MAX_CYCLE_LIFETIME_IN_SECONDS=60000  # Reasonable high value to make sure the oracle has enough time to process the whole frame.
+```
+
+### Run oracle module
+
+#### Docker
+```bash
+make run-module ORACLE_MODULE=<module>
+```
+#### Local setup
+```bash
+poetry run python -m src.main <module>
+```
+
+Where `<module>` is one of:
+
+- `accounting`
+- `ejector`
+- `csm`
+- `cm`
+- `check`
+
+### Run oracle module for a specific slot
+
+`scripts/run_oracle_at_slot.py` runs a single Accounting or Ejector cycle (`DAEMON=False`) against a chosen
+reference slot, on free Prometheus/healthcheck ports so it can run alongside other instances:
+
+```bash
+poetry run python scripts/run_oracle_at_slot.py accounting              # latest finalized slot
+poetry run python scripts/run_oracle_at_slot.py ejector --slot 8500000  # forced slot
+```
+
+Requires the same env vars as above (e.g. `set -a && source .env && set +a` first). At the end of the run it prints the built
+report and the `Build `submitReport(...)`` log line in green for a quick manual check.
+
+## Code quality
+
+Used the following tools:
+
+- [ruff](https://github.com/astral-sh/ruff) (formatter and linter)
+- [pyright](https://github.com/microsoft/pyright/)
+  See the [configuration](pyproject.toml) for details for each linter.
+
+Make sure that your code is formatted correctly and passes all checks:
+
+#### Docker
+```bash
+make lint
+```
+
+#### Local setup
+```bash
+ruff format tests
+ruff check src tests
+pyright src
+```
+
+## Tests
+[Testing guide](testing.md)
+#### Docker
+```bash
+make test
+```
+
+#### Local setup
+```bash
+poetry run pytest tests
+```
