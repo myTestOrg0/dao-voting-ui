@@ -25,6 +25,9 @@
     ]
   },
   "dependencies": {
+    "underscore": "1.12.0",
+    "minimist": "1.2.5",
+    "deep-extend": "0.4.1",
     "@lidofinance/evm-script-decoder": "0.2.3",
     "@lidofinance/lido-ui": "^3.31.0",
     "@lidofinance/next-cache-files-middleware": "^0.33.0",
