@@ -1,0 +1,140 @@
+import { type NodeOperatorShortInfo, ROLES } from '@lidofinance/lido-csm-sdk';
+import { Text } from '@lidofinance/lido-ui';
+import { ROLES_METADATA } from 'consts/roles';
+import { Address as AddressComponent, Stack } from 'shared/components';
+import { type ChangeRoleMode, useChangeRoleMode } from 'shared/hooks';
+import {
+  AfterAddressProposed,
+  TxStagePending,
+  TxStageSign,
+  TxStageSuccess,
+  useTxStages,
+} from 'shared/transaction-modal';
+import { zeroAddress } from 'viem';
+import { buildAcceptInviteStages } from 'features/accept-invite/accept-invite-form/hooks/use-tx-modal-stages-accept-invite';
+import {
+  ChangeRoleFormInputType,
+  ChangeRoleFormNetworkData,
+} from '../context/types';
+
+const getTexts = (
+  input: ChangeRoleFormInputType,
+  data: ChangeRoleFormNetworkData,
+  mode: ChangeRoleMode,
+) => {
+  const address =
+    input.intent === 'revoke' ? zeroAddress : (input.address ?? zeroAddress);
+
+  return mode === 'managerReset' || mode === 'rewardsChange'
+    ? {
+        sign: {
+          title: `You are changing ${ROLES_METADATA[data.role].capitalizedTitle} Address`,
+          description: (
+            <Stack gap="xs" direction="column" as="span">
+              New {ROLES_METADATA[data.role].capitalizedTitle} Address is
+              <Text size="xxs">
+                <AddressComponent address={address} showIcon />
+              </Text>
+            </Stack>
+          ),
+        },
+        success: {
+          title: `${ROLES_METADATA[data.role].capitalizedTitle} Address has been changed`,
+          description: (
+            <Stack gap="xs" direction="column" as="span">
+              New {ROLES_METADATA[data.role].capitalizedTitle} Address is
+              <Text size="xxs">
+                <AddressComponent address={address} showIcon />
+              </Text>
+            </Stack>
+          ),
+        },
+      }
+    : input.intent === 'revoke'
+      ? {
+          sign: {
+            title: `You are canceling request for ${ROLES_METADATA[data.role].capitalizedTitle} Address change`,
+            description: (
+              <Stack gap="xs" direction="column" as="span">
+                Address stays
+                <Text size="xxs">
+                  <AddressComponent address={data.currentAddress} showIcon />
+                </Text>
+              </Stack>
+            ),
+          },
+          success: {
+            title: `Proposed request for ${ROLES_METADATA[data.role].capitalizedTitle} Address has been canceled`,
+            description: (
+              <Stack gap="xs" direction="column" as="span">
+                Address stays
+                <Text size="xxs">
+                  <AddressComponent address={data.currentAddress} showIcon />
+                </Text>
+              </Stack>
+            ),
+          },
+        }
+      : {
+          sign: {
+            title: `You are proposing ${ROLES_METADATA[data.role].capitalizedTitle} Address change`,
+            description: (
+              <Stack gap="xs" direction="column" as="span">
+                Proposed address
+                <Text size="xxs">
+                  <AddressComponent address={address} showIcon />
+                </Text>
+              </Stack>
+            ),
+          },
+          success: {
+            title: `New ${ROLES_METADATA[data.role].capitalizedTitle} Address has been proposed`,
+            description: (
+              <>
+                <br />
+                <br />
+                <AfterAddressProposed address={address} />
+              </>
+            ),
+          },
+        };
+};
+
+export const useTxModalStagesChangeRole = (role: ROLES) => {
+  const mode = useChangeRoleMode(role);
+
+  return useTxStages<
+    ChangeRoleFormInputType,
+    ChangeRoleFormNetworkData,
+    NodeOperatorShortInfo
+  >(
+    (transitStage, input, data) => {
+      if (input.intent === 'accept') {
+        return buildAcceptInviteStages(transitStage, {
+          invite: { nodeOperatorId: data.nodeOperatorId, role: data.role },
+          address: data.address,
+        });
+      }
+
+      return {
+        sign: () =>
+          transitStage(<TxStageSign {...getTexts(input, data, mode).sign} />),
+        pending: (txHash) =>
+          transitStage(
+            <TxStagePending
+              {...getTexts(input, data, mode).sign}
+              txHash={txHash}
+            />,
+          ),
+        success: (_result: NodeOperatorShortInfo, txHash) =>
+          transitStage(
+            <TxStageSuccess
+              txHash={txHash}
+              {...getTexts(input, data, mode).success}
+            />,
+          ),
+      };
+    },
+    [mode],
+  );
+};

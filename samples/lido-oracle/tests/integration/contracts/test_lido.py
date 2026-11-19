@@ -1,0 +1,20 @@
+import pytest
+
+from src.modules.oracles.accounting.types import BeaconStat
+from tests.integration.contracts.contract_utils import check_contract, check_value_type
+
+
+@pytest.mark.mainnet
+@pytest.mark.integration
+def test_lido_contract_call(lido_contract, accounting_oracle_contract, burner_contract, caplog):
+    check_contract(
+        lido_contract,
+        [
+            ('get_beacon_stat', ('latest',), lambda response: check_value_type(response, BeaconStat)),
+            ('total_supply', ('latest',), lambda response: check_value_type(response, int)),
+            # Uncomment after SRv3 release on mainnet
+            # ('get_deposits_reserve', ('latest',), lambda response: check_value_type(response, int)),
+            # ('get_withdrawals_reserve', ('latest',), lambda response: check_value_type(response, int)),
+        ],
+        caplog,
+    )

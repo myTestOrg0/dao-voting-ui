@@ -1,0 +1,58 @@
+import type { OperatorInfo } from './enhanced-types';
+
+const FALLBACK_LOWEST_PRIORITY = 5;
+
+type QueueConfig = {
+  priority: number;
+  maxDeposits: number;
+  lowestPriority: number;
+};
+
+// Key counts only — compares against queueConfig.maxDeposits, a key count.
+// Callers scale this into the graph's unit.
+export type PriorityPlacement = {
+  keysCount: bigint;
+  allocation: [number, bigint][];
+};
+
+export const calculatePriorityPlacement = (
+  operatorInfo: OperatorInfo | undefined,
+  queueConfig: QueueConfig | undefined,
+  submittingCount: number | undefined,
+): PriorityPlacement | undefined => {
+  if (submittingCount === undefined) {
+    return undefined;
+  }
+  if (!operatorInfo || !queueConfig || !submittingCount) {
+    return {
+      keysCount: BigInt(submittingCount),
+      allocation: submittingCount
+        ? [[FALLBACK_LOWEST_PRIORITY, BigInt(submittingCount)]]
+        : [],
+    };
+  }
+
+  const { totalDepositedKeys = 0, enqueuedCount = 0 } = operatorInfo;
+
+  const { priority, maxDeposits, lowestPriority } = queueConfig;
+
+  // Calculate available priority slots
+  const depositedAndQueued = totalDepositedKeys + enqueuedCount;
+  const priorityDepositsLeft = Math.max(0, maxDeposits - depositedAndQueued);
+
+  // Keys that will go to priority queue
+  const keysToPriority = Math.min(submittingCount, priorityDepositsLeft);
+
+  // Remaining keys go to general queue (lowest priority)
+  const keysToLowestPriority = submittingCount - keysToPriority;
+
+  const allocation = [
+    [priority, BigInt(keysToPriority)],
+    [lowestPriority, BigInt(keysToLowestPriority)],
+  ].filter(([, count]) => count > 0) as [number, bigint][];
+
+  return {
+    keysCount: BigInt(submittingCount),
+    allocation,
+  };
+};

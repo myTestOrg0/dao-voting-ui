@@ -1,0 +1,23 @@
+# dependencies
+/node_modules
+/.pnp
+
+# generated (hey-api openapi-ts types)
+/modules/surveys-sdk/generated
+
+# vendored OpenAPI spec — kept byte-faithful to the live API
+/modules/surveys-sdk/openapi
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+CHANGELOG.md
+
+/.browser_context**

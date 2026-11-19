@@ -1,0 +1,390 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+import { ethers, network as hardhatNetwork } from "hardhat";
+import { readScratchParameters, scratchParametersToDeploymentState } from "scripts/utils/scratch";
+
+const NETWORK_STATE_FILE_PREFIX = "deployed-";
+const NETWORK_STATE_FILE_DIR = ".";
+
+export type DeploymentState = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+};
+
+export const TemplateAppNames = {
+  // Lido apps
+  LIDO: "lido",
+  NODE_OPERATORS_REGISTRY: "node-operators-registry",
+  SIMPLE_DVT: "simple-dvt",
+  // Aragon apps
+  ARAGON_AGENT: "aragon-agent",
+  ARAGON_FINANCE: "aragon-finance",
+  ARAGON_TOKEN_MANAGER: "aragon-token-manager",
+  ARAGON_VOTING: "aragon-voting",
+};
+
+// State file contracts root keys
+export enum Sk {
+  deployer = "deployer",
+  aragonEnsLabelName = "aragonEnsLabelName",
+  apmRegistryFactory = "apmRegistryFactory",
+  appLido = "app:lido",
+  appNodeOperatorsRegistry = "app:node-operators-registry",
+  appSimpleDvt = "app:simple-dvt",
+  aragonAcl = "aragon-acl",
+  aragonEvmScriptRegistry = "aragon-evm-script-registry",
+  aragonApmRegistry = "aragon-apm-registry",
+  aragonId = "aragonID",
+  aragonKernel = "aragon-kernel",
+  aragonRepoBase = "aragon-repo-base",
+  aragonLidoAppRepo = "aragon-lido-app-repo",
+  aragonNodeOperatorsRegistryAppRepo = "aragon-node-operators-registry-app-repo",
+  aragonSimpleDvtAppRepo = "aragon-simple-dvt-app-repo",
+  appAgent = "app:aragon-agent",
+  appFinance = "app:aragon-finance",
+  appTokenManager = "app:aragon-token-manager",
+  appVoting = "app:aragon-voting",
+  daoFactory = "daoFactory",
+  daoInitialSettings = "daoInitialSettings",
+  ens = "ens",
+  ensFactory = "ensFactory",
+  ensNode = "ensNode",
+  evmScriptRegistryFactory = "evmScriptRegistryFactory",
+  ensSubdomainRegistrar = "ensSubdomainRegistrar",
+  ldo = "ldo",
+  lidoApm = "lidoApm",
+  lidoApmEnsName = "lidoApmEnsName",
+  lidoApmEnsRegDurationSec = "lidoApmEnsRegDurationSec",
+  lidoTemplate = "lidoTemplate",
+  miniMeTokenFactory = "miniMeTokenFactory",
+  lidoTemplateCreateStdAppReposTx = "lidoTemplateCreateStdAppReposTx",
+  nodeOperatorsRegistry = "nodeOperatorsRegistry",
+  simpleDvt = "simpleDvt",
+  createAppReposTx = "createAppReposTx",
+  lidoTemplateNewDaoTx = "lidoTemplateNewDaoTx",
+  callsScript = "callsScript",
+  vestingParams = "vestingParams",
+  withdrawalVault = "withdrawalVault",
+  circuitBreaker = "circuitBreaker",
+  delegationFactory = "delegationFactory",
+  gateSeal = "gateSeal",
+  gateSealV3 = "gateSealV3",
+  gateSealFactory = "gateSealFactory",
+  gateSealTW = "gateSealTW",
+  resealManager = "resealManager",
+  stakingRouter = "stakingRouter",
+  burner = "burner",
+  executionLayerRewardsVault = "executionLayerRewardsVault",
+  accountingOracle = "accountingOracle",
+  depositSecurityModule = "depositSecurityModule",
+  dummyEmptyContract = "dummyEmptyContract",
+  eip712StETH = "eip712StETH",
+  hashConsensusForAccountingOracle = "hashConsensusForAccountingOracle",
+  hashConsensusForValidatorsExitBusOracle = "hashConsensusForValidatorsExitBusOracle",
+  oracleDaemonConfig = "oracleDaemonConfig",
+  oracleReportSanityChecker = "oracleReportSanityChecker",
+  validatorsExitBusOracle = "validatorsExitBusOracle",
+  withdrawalQueueERC721 = "withdrawalQueueERC721",
+  depositContract = "depositContract",
+  wstETH = "wstETH",
+  lidoLocator = "lidoLocator",
+  chainSpec = "chainSpec",
+  chainId = "chainId",
+  scratchDeployGasUsed = "scratchDeployGasUsed",
+  minFirstAllocationStrategy = "minFirstAllocationStrategy",
+  accounting = "accounting",
+  vaultHub = "vaultHub",
+  tokenRebaseNotifier = "tokenRebaseNotifier",
+  tokenRebaseNotifierV3 = "tokenRebaseNotifierV3",
+  // Triggerable withdrawals
+  validatorExitDelayVerifier = "validatorExitDelayVerifier",
+  triggerableWithdrawalsGateway = "triggerableWithdrawalsGateway",
+  consolidationGateway = "consolidationGateway",
+  consolidationBus = "consolidationBus",
+  consolidationMigrator = "consolidationMigrator",
+  // Vaults
+  predepositGuarantee = "predepositGuarantee",
+  stakingVaultImplementation = "stakingVaultImplementation",
+  stakingVaultFactory = "stakingVaultFactory",
+  dashboardImpl = "dashboardImpl",
+  stakingVaultBeacon = "stakingVaultBeacon",
+  v3Template = "v3Template",
+  v3Addresses = "v3Addresses",
+  v3VoteScript = "v3VoteScript",
+  stakingRouterV3VoteScript = "stakingRouterV3VoteScript",
+  operatorGrid = "operatorGrid",
+  validatorConsolidationRequests = "validatorConsolidationRequests",
+  lazyOracle = "lazyOracle",
+  topUpGateway = "topUpGateway",
+  v3TemporaryAdmin = "v3TemporaryAdmin",
+  // Dual Governance
+  dgDualGovernance = "dg:dualGovernance",
+  dgEmergencyProtectedTimelock = "dg:emergencyProtectedTimelock",
+  depositsTempStorage = "depositsTempStorage",
+  beaconChainDepositor = "beaconChainDepositor",
+  srLib = "srLib",
+  // Easy Track
+  easyTrack = "easyTrack",
+  easyTrackEVMScriptExecutor = "easyTrackEVMScriptExecutor",
+  vaultsAdapter = "vaultsAdapter",
+  // Harnesses
+  alertingHarness = "alertingHarness",
+  // protocol upgrade
+  upgradeConfig = "upgradeConfig",
+  upgradeTemplate = "upgradeTemplate",
+  upgradeVoteScript = "upgradeVoteScript",
+  upgradeTemporaryAdmin = "upgradeTemporaryAdmin",
+  // Staking modules
+  sm_CSM = "sm:CSM",
+  sm_CM = "sm:CM",
+}
+
+export function getAddress(contractKey: Sk, state: DeploymentState): string {
+  switch (contractKey) {
+    case Sk.accountingOracle:
+    case Sk.appAgent:
+    case Sk.appFinance:
+    case Sk.appTokenManager:
+    case Sk.appVoting:
+    case Sk.appLido:
+    case Sk.appNodeOperatorsRegistry:
+    case Sk.aragonAcl:
+    case Sk.aragonApmRegistry:
+    case Sk.aragonEvmScriptRegistry:
+    case Sk.aragonKernel:
+    case Sk.aragonLidoAppRepo:
+    case Sk.aragonNodeOperatorsRegistryAppRepo:
+    case Sk.aragonSimpleDvtAppRepo:
+    case Sk.lidoLocator:
+    case Sk.stakingRouter:
+    case Sk.validatorsExitBusOracle:
+    case Sk.withdrawalQueueERC721:
+    case Sk.withdrawalVault:
+    case Sk.lazyOracle:
+    case Sk.operatorGrid:
+    case Sk.accounting:
+    case Sk.burner:
+    case Sk.appSimpleDvt:
+    case Sk.predepositGuarantee:
+    case Sk.vaultHub:
+    case Sk.dgDualGovernance:
+    case Sk.dgEmergencyProtectedTimelock:
+    case Sk.consolidationBus:
+    case Sk.consolidationMigrator:
+    case Sk.topUpGateway:
+    case Sk.sm_CSM:
+    case Sk.sm_CM:
+      return state[contractKey].proxy.address;
+    case Sk.apmRegistryFactory:
+    case Sk.callsScript:
+    case Sk.daoFactory:
+    case Sk.depositSecurityModule:
+    case Sk.dummyEmptyContract:
+    case Sk.eip712StETH:
+    case Sk.ens:
+    case Sk.ensFactory:
+    case Sk.evmScriptRegistryFactory:
+    case Sk.executionLayerRewardsVault:
+    case Sk.circuitBreaker:
+    case Sk.delegationFactory:
+    case Sk.gateSeal:
+    case Sk.gateSealV3:
+    case Sk.gateSealTW:
+    case Sk.resealManager:
+    case Sk.hashConsensusForAccountingOracle:
+    case Sk.hashConsensusForValidatorsExitBusOracle:
+    case Sk.ldo:
+    case Sk.lidoApm:
+    case Sk.lidoTemplate:
+    case Sk.miniMeTokenFactory:
+    case Sk.oracleDaemonConfig:
+    case Sk.oracleReportSanityChecker:
+    case Sk.wstETH:
+    case Sk.depositContract:
+    case Sk.tokenRebaseNotifier:
+    case Sk.tokenRebaseNotifierV3:
+    case Sk.validatorExitDelayVerifier:
+    case Sk.triggerableWithdrawalsGateway:
+    case Sk.consolidationGateway:
+    case Sk.stakingVaultFactory:
+    case Sk.minFirstAllocationStrategy:
+    case Sk.validatorConsolidationRequests:
+    case Sk.v3VoteScript:
+    case Sk.stakingRouterV3VoteScript:
+    case Sk.depositsTempStorage:
+    case Sk.beaconChainDepositor:
+    case Sk.vaultsAdapter:
+    case Sk.easyTrack:
+    case Sk.upgradeTemporaryAdmin:
+    case Sk.upgradeTemplate:
+    case Sk.upgradeVoteScript:
+    case Sk.gateSealFactory:
+      return state[contractKey].address;
+    default:
+      throw new Error(`Unsupported contract entry key ${contractKey}`);
+  }
+}
+export function getAddressValidated(contractKey: Sk, state: DeploymentState): string | null {
+  if (!state[contractKey]) return null;
+  // allow error throw on missed items
+  let address = getAddress(contractKey, state);
+  try {
+    address = ethers.getAddress(address);
+    return address !== "0x0000000000000000000000000000000000000000" ? address : null;
+  } catch {
+    return null;
+  }
+}
+
+//
+// Substate helpers
+//
+// Some state entries (e.g. the staking modules `sm:CSM` / `sm:CM`) bundle several contracts that each
+// have a proxy and/or an implementation. They are stored as a nested "substate": a `contracts` map whose
+// entries mirror a normal contract entry (`{ proxy: { address }, implementation: { address } }` or a flat
+// `{ address }`), addressed by the parent key plus a sub-key.
+//
+export function getSubAddress(contractKey: Sk, subKey: string, state: DeploymentState): string {
+  const entry = state[contractKey]?.contracts?.[subKey];
+  if (!entry) {
+    throw new Error(`Unknown substate entry ${contractKey}.${subKey}`);
+  }
+  return entry.proxy?.address ?? entry.address;
+}
+
+export function getSubAddressValidated(contractKey: Sk, subKey: string, state: DeploymentState): string | null {
+  if (!state[contractKey]?.contracts?.[subKey]) return null;
+  let address = getSubAddress(contractKey, subKey, state);
+  try {
+    address = ethers.getAddress(address);
+    return address !== "0x0000000000000000000000000000000000000000" ? address : null;
+  } catch {
+    return null;
+  }
+}
+
+// Deep-merge `supplement` into `state[key].contracts[subKey]`, preserving sibling sub-entries and the
+// existing fields of the targeted sub-entry, then persist.
+export function updateSubObjectInState(contractKey: Sk, subKey: string, supplement: object): DeploymentState {
+  const state = readNetworkState();
+  const parent = state[contractKey] ?? {};
+  const contracts = parent.contracts ?? {};
+  state[contractKey] = {
+    ...parent,
+    contracts: {
+      ...contracts,
+      [subKey]: {
+        ...contracts[subKey],
+        ...supplement,
+      },
+    },
+  };
+  persistNetworkState(state);
+  return state as unknown as DeploymentState;
+}
+
+export function readNetworkState({
+  deployer,
+  networkStateFile,
+}: {
+  deployer?: string;
+  networkStateFile?: string;
+} = {}) {
+  const fileName = _getStateFileFileName(networkStateFile);
+  const state = _readStateFile(fileName);
+
+  // Validate the deployer
+  if (deployer !== undefined && deployer != state.deployer) {
+    throw new Error(`The specified deployer ${deployer} does not match the one ${state.deployer} in the state file!`);
+  }
+
+  // Validate the chainId
+  const networkChainId = hardhatNetwork.config.chainId;
+  if (state[Sk.chainSpec].chainId && networkChainId !== parseInt(state[Sk.chainSpec].chainId)) {
+    throw new Error(
+      `The chainId: ${networkChainId} does not match the one (${state[Sk.chainSpec].chainId}) in the state file!`,
+    );
+  }
+
+  return state;
+}
+
+export function updateObjectInState(key: Sk, supplement: object): DeploymentState {
+  const state = readNetworkState();
+  state[key] = {
+    ...state[key],
+    ...supplement,
+  };
+  persistNetworkState(state);
+  return state as unknown as DeploymentState;
+}
+
+// path is either top level key or array of keys
+export function setValueInState(key: Sk, value: unknown): DeploymentState {
+  const state = readNetworkState();
+  state[key] = value;
+  persistNetworkState(state);
+  return state;
+}
+
+export function incrementGasUsed(increment: bigint | number, useStateFile = true, key: Sk = Sk.scratchDeployGasUsed) {
+  if (!useStateFile) {
+    return;
+  }
+
+  const state = readNetworkState();
+  state[key] = (BigInt(state[key] || 0) + BigInt(increment)).toString();
+  persistNetworkState(state);
+}
+
+export async function resetStateFileFromDeployParams(): Promise<void> {
+  const fileName = _getStateFileFileName();
+  const scratchParams = readScratchParameters();
+  const initialState = scratchParametersToDeploymentState(scratchParams);
+  const data = JSON.stringify(_sortKeysAlphabetically(initialState), null, 2);
+  writeFileSync(fileName, `${data}\n`, { encoding: "utf8", flag: "w" });
+}
+
+export function persistNetworkState(state: DeploymentState): void {
+  const fileName = _getStateFileFileName();
+  const stateSorted = _sortKeysAlphabetically(state);
+  const data = JSON.stringify(stateSorted, null, 2);
+
+  try {
+    writeFileSync(fileName, `${data}\n`, { encoding: "utf8", flag: "w" });
+  } catch (error) {
+    throw new Error(`Failed to write network state file ${fileName}: ${(error as Error).message}`);
+  }
+}
+
+function _getStateFileFileName(networkStateFile = "") {
+  // Use the specified network state file or the one from the environment
+  networkStateFile = networkStateFile || process.env.NETWORK_STATE_FILE || "";
+  return networkStateFile
+    ? resolve(NETWORK_STATE_FILE_DIR, networkStateFile)
+    : _getFileName(NETWORK_STATE_FILE_DIR, hardhatNetwork.name);
+}
+
+function _getFileName(dir: string, networkName: string, prefix: string = NETWORK_STATE_FILE_PREFIX) {
+  return resolve(dir, `${prefix}${networkName}.json`);
+}
+
+function _readStateFile(fileName: string) {
+  const data = readFileSync(fileName, "utf8");
+  try {
+    // return parseToDeploymentState(data);
+    return JSON.parse(data) as DeploymentState;
+  } catch (error) {
+    throw new Error(`malformed network state file ${fileName}: ${(error as Error).message}`);
+  }
+}
+
+function _sortKeysAlphabetically(unsortedObject: DeploymentState) {
+  const sortedObject: DeploymentState = {};
+  const sortedKeys = Object.keys(unsortedObject).sort();
+  for (const key of sortedKeys) {
+    sortedObject[key] = unsortedObject[key];
+  }
+  return sortedObject;
+}

@@ -1,0 +1,38 @@
+import { MODULE_NAME, NodeOperatorId } from '@lidofinance/lido-csm-sdk';
+import {
+  callSurvey,
+  operatorKey as buildOperatorKey,
+  surveyRequest,
+  usePublicSurvey,
+} from 'modules/surveys-sdk';
+import { useModule } from 'modules/web3';
+import { openIndex } from 'modules/surveys-sdk/generated';
+import type { FilledDto } from 'modules/surveys-sdk/generated';
+
+export const useSurveysFilled = ({
+  nodeOperatorId,
+  module: moduleProp,
+}: {
+  nodeOperatorId: NodeOperatorId | undefined;
+  module?: MODULE_NAME;
+}) => {
+  const { module: activeModule } = useModule();
+  const surveyModule = moduleProp ?? activeModule;
+  // Built directly instead of via `useOperatorKey`, which falls back to the
+  // connected operator on `undefined` — callers pass `undefined` to disable.
+  const operatorKey = buildOperatorKey(surveyModule, nodeOperatorId);
+  // Public cache key discriminator. Preserves the string the retired
+  // `endpoints.publicSummary(operatorKey)` produced (`open/${operatorKey}`),
+  // so the `surveysKeys.public(path)` cache identity is unchanged. The request
+  // itself routes through the generated `openIndex` call.
+  const path = operatorKey ? `open/${operatorKey}` : null;
+
+  return usePublicSurvey<FilledDto>(path, ({ signal }) =>
+    callSurvey(() =>
+      openIndex({
+        ...surveyRequest(undefined, signal),
+        path: { nodeOperatorId: operatorKey as string },
+      }),
+    ),
+  );
+};

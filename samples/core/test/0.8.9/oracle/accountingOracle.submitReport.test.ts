@@ -1,0 +1,872 @@
+import { expect } from "chai";
+import { keccakFromString } from "ethereumjs-util";
+import { BigNumberish, getBigInt, ZeroHash } from "ethers";
+import { ethers } from "hardhat";
+
+import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
+import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+
+import {
+  Accounting__MockForAccountingOracle,
+  AccountingOracle__Harness,
+  HashConsensus__Harness,
+  Lido__MockForAccounting,
+  OracleReportSanityChecker,
+  StakingRouter__MockForAccountingOracle,
+  WithdrawalQueue__MockForAccountingOracle,
+} from "typechain-types";
+
+import {
+  AO_CONSENSUS_VERSION,
+  calcExtraDataListHash,
+  calcReportDataHash,
+  encodeExtraDataItems,
+  ether,
+  EXTRA_DATA_FORMAT_EMPTY,
+  EXTRA_DATA_FORMAT_LIST,
+  ExtraDataType,
+  GENESIS_TIME,
+  getReportDataItems,
+  ONE_GWEI,
+  OracleReport,
+  packExtraDataList,
+  ReportAsArray,
+  SECONDS_PER_SLOT,
+} from "lib";
+
+import { deployAndConfigureAccountingOracle, HASH_1, SLOTS_PER_FRAME } from "test/deploy";
+import { Snapshot } from "test/suite";
+
+describe("AccountingOracle.sol:submitReport", () => {
+  let consensus: HashConsensus__Harness;
+  let oracle: AccountingOracle__Harness;
+  let reportItems: ReportAsArray;
+  let reportFields: OracleReport & { refSlot: bigint };
+  let reportHash: string;
+  let extraDataList: string;
+  let extraDataHash: string;
+  let extraDataItems: string[];
+  let oracleVersion: bigint;
+  let deadline: BigNumberish;
+  let mockLido: Lido__MockForAccounting;
+  let mockStakingRouter: StakingRouter__MockForAccountingOracle;
+  let extraData: ExtraDataType;
+  let mockAccounting: Accounting__MockForAccountingOracle;
+  let sanityChecker: OracleReportSanityChecker;
+  let mockWithdrawalQueue: WithdrawalQueue__MockForAccountingOracle;
+  let snapshot: string;
+
+  let admin: HardhatEthersSigner;
+  let member1: HardhatEthersSigner;
+  let member2: HardhatEthersSigner;
+
+  const getReportFields = (override = {}) => ({
+    consensusVersion: AO_CONSENSUS_VERSION,
+    refSlot: 0n,
+    clValidatorsBalanceGwei: 300n * ONE_GWEI,
+    clPendingBalanceGwei: 20n * ONE_GWEI,
+    stakingModuleIdsWithNewlyExitedValidators: [1],
+    numExitedValidatorsByStakingModule: [3],
+    stakingModuleIdsWithUpdatedBalance: [1],
+    validatorBalancesGweiByStakingModule: [300n * ONE_GWEI],
+    withdrawalVaultBalance: ether("1"),
+    elRewardsVaultBalance: ether("2"),
+    sharesRequestedToBurn: ether("3"),
+    withdrawalFinalizationBatches: [1],
+    simulatedShareRate: 10n ** 27n,
+    isBunkerMode: true,
+    vaultsDataTreeRoot: ethers.ZeroHash,
+    vaultsDataTreeCid: "",
+    extraDataFormat: EXTRA_DATA_FORMAT_LIST,
+    extraDataHash,
+    extraDataItemsCount: extraDataItems.length,
+    ...override,
+  });
+
+  const deploy = async () => {
+    [admin, member1, member2] = await ethers.getSigners();
+    const deployed = await deployAndConfigureAccountingOracle(admin.address);
+    const { refSlot } = await deployed.consensus.getCurrentFrame();
+
+    extraData = {
+      exitedKeys: [
+        { moduleId: 2, nodeOpIds: [1, 2], keysCounts: [1, 3] },
+        { moduleId: 3, nodeOpIds: [1], keysCounts: [2] },
+      ],
+    };
+
+    extraDataItems = encodeExtraDataItems(extraData);
+    extraDataList = packExtraDataList(extraDataItems);
+    extraDataHash = calcExtraDataListHash(extraDataList);
+    reportFields = getReportFields({ refSlot });
+    reportItems = getReportDataItems(reportFields);
+    reportHash = calcReportDataHash(reportItems);
+    await deployed.consensus.connect(admin).addMember(member1, 1);
+    await deployed.consensus.connect(member1).submitReport(refSlot, reportHash, AO_CONSENSUS_VERSION);
+
+    oracleVersion = await deployed.oracle.getContractVersion();
+    deadline = (await deployed.oracle.getConsensusReport()).processingDeadlineTime;
+
+    oracle = deployed.oracle;
+    consensus = deployed.consensus;
+    mockLido = deployed.lido;
+    mockStakingRouter = deployed.stakingRouter;
+    mockAccounting = deployed.accounting;
+    sanityChecker = deployed.oracleReportSanityChecker;
+    mockWithdrawalQueue = deployed.withdrawalQueue;
+  };
+
+  async function takeSnapshot() {
+    snapshot = await Snapshot.take();
+  }
+
+  async function rollback() {
+    await Snapshot.restore(snapshot);
+  }
+
+  async function prepareNextReport(newReportFields: OracleReport) {
+    await consensus.setTime(deadline);
+
+    const newReportItems = getReportDataItems(newReportFields);
+    const nextReportHash = calcReportDataHash(newReportItems);
+
+    await consensus.advanceTimeToNextFrameStart();
+    await consensus.connect(member1).submitReport(newReportFields.refSlot, nextReportHash, AO_CONSENSUS_VERSION);
+
+    return {
+      newReportFields,
+      newReportItems,
+      reportHash: nextReportHash,
+    };
+  }
+
+  async function prepareNextReportInNextFrame(newReportFields: OracleReport) {
+    const { refSlot } = await consensus.getCurrentFrame();
+
+    return await prepareNextReport({
+      ...newReportFields,
+      refSlot: refSlot + SLOTS_PER_FRAME,
+    });
+  }
+
+  before(deploy);
+
+  context("deploying", () => {
+    before(takeSnapshot);
+    after(rollback);
+
+    it("deploying accounting oracle", async () => {
+      expect(oracle).to.be.not.null;
+      expect(consensus).to.be.not.null;
+      expect(reportItems).to.be.not.null;
+      expect(extraData).to.be.not.null;
+      expect(extraDataList).to.be.not.null;
+      expect(extraDataHash).to.be.not.null;
+      expect(extraDataItems).to.be.not.null;
+      expect(oracleVersion).to.be.not.null;
+      expect(deadline).to.be.not.null;
+      expect(mockStakingRouter).to.be.not.null;
+      expect(mockAccounting).to.be.not.null;
+    });
+  });
+
+  context("discarded report prevents data submit", () => {
+    before(takeSnapshot);
+    after(rollback);
+
+    it("report is discarded", async () => {
+      const { refSlot } = await consensus.getCurrentFrame();
+      const tx = await consensus.connect(admin).addMember(member2, 2);
+      await expect(tx).to.emit(oracle, "ReportDiscarded").withArgs(refSlot, reportHash);
+    });
+
+    it("processing state reverts to pre-report state ", async () => {
+      const state = await oracle.getProcessingState();
+      expect(state.mainDataHash).to.equal(ZeroHash);
+      expect(state.extraDataHash).to.equal(ZeroHash);
+      expect(state.extraDataFormat).to.equal(0);
+      expect(state.mainDataSubmitted).to.be.false;
+      expect(state.extraDataFormat).to.equal(0);
+      expect(state.extraDataItemsCount).to.equal(0);
+      expect(state.extraDataItemsSubmitted).to.equal(0);
+    });
+
+    it("reverts on trying to submit the discarded report", async () => {
+      await expect(oracle.connect(member1).submitReportData(reportFields, oracleVersion)).to.be.revertedWithCustomError(
+        oracle,
+        "UnexpectedDataHash",
+      );
+    });
+  });
+
+  context("submitReportData", () => {
+    beforeEach(takeSnapshot);
+    afterEach(rollback);
+
+    context("checks contract version", () => {
+      it("should revert if incorrect contract version", async () => {
+        await consensus.setTime(deadline);
+
+        const incorrectNextVersion = oracleVersion + 1n;
+        const incorrectPrevVersion = oracleVersion - 1n;
+
+        await expect(oracle.connect(member1).submitReportData(reportFields, incorrectNextVersion))
+          .to.be.revertedWithCustomError(oracle, "UnexpectedContractVersion")
+          .withArgs(oracleVersion, incorrectNextVersion);
+
+        await expect(oracle.connect(member1).submitReportData(reportFields, incorrectPrevVersion))
+          .to.be.revertedWithCustomError(oracle, "UnexpectedContractVersion")
+          .withArgs(oracleVersion, incorrectPrevVersion);
+      });
+
+      it("should should allow calling if correct contract version", async () => {
+        await consensus.setTime(deadline);
+
+        const tx = await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(reportFields.refSlot, anyValue);
+      });
+    });
+
+    context("checks ref slot", () => {
+      it("should revert if incorrect ref slot", async () => {
+        await consensus.setTime(deadline);
+        const { refSlot } = await consensus.getCurrentFrame();
+
+        const incorrectRefSlot = refSlot + 1n;
+
+        const newReportFields = {
+          ...reportFields,
+          refSlot: incorrectRefSlot,
+        };
+
+        await expect(oracle.connect(member1).submitReportData(newReportFields, oracleVersion))
+          .to.be.revertedWithCustomError(oracle, "UnexpectedRefSlot")
+          .withArgs(refSlot, incorrectRefSlot);
+      });
+
+      it("should should allow calling if correct ref slot", async () => {
+        await consensus.setTime(deadline);
+        const { newReportFields } = await prepareNextReportInNextFrame({ ...reportFields });
+        const tx = await oracle.connect(member1).submitReportData(newReportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(newReportFields.refSlot, anyValue);
+      });
+    });
+
+    context("only allows submitting main data for the same ref. slot once", () => {
+      it("reverts on trying to submit the second time", async () => {
+        const tx = await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(reportFields.refSlot, anyValue);
+        await expect(
+          oracle.connect(member1).submitReportData(reportFields, oracleVersion),
+        ).to.be.revertedWithCustomError(oracle, "RefSlotAlreadyProcessing");
+      });
+    });
+
+    context("checks consensus version", () => {
+      it("should revert if incorrect consensus version", async () => {
+        await consensus.setTime(deadline);
+
+        const expectedConsensusVersion = await oracle.getConsensusVersion();
+        expect(expectedConsensusVersion).to.equal(AO_CONSENSUS_VERSION);
+
+        const incorrectNextVersion = AO_CONSENSUS_VERSION + 1n;
+        const incorrectPrevVersion = AO_CONSENSUS_VERSION - 1n;
+
+        await expect(
+          oracle
+            .connect(member1)
+            .submitReportData({ ...reportFields, consensusVersion: incorrectNextVersion }, oracleVersion),
+        )
+          .to.be.revertedWithCustomError(oracle, "UnexpectedConsensusVersion")
+          .withArgs(expectedConsensusVersion, incorrectNextVersion);
+
+        await expect(
+          oracle
+            .connect(member1)
+            .submitReportData({ ...reportFields, consensusVersion: incorrectPrevVersion }, oracleVersion),
+        )
+          .to.be.revertedWithCustomError(oracle, "UnexpectedConsensusVersion")
+          .withArgs(expectedConsensusVersion, incorrectPrevVersion);
+      });
+
+      it("should allow calling if correct consensus version", async () => {
+        await consensus.setTime(deadline);
+        const { refSlot } = await consensus.getCurrentFrame();
+
+        const tx = await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(refSlot, anyValue);
+
+        const newConsensusVersion = AO_CONSENSUS_VERSION + 1n;
+        const nextRefSlot = refSlot + SLOTS_PER_FRAME;
+        const newReportFields = {
+          ...reportFields,
+          refSlot: nextRefSlot,
+          consensusVersion: newConsensusVersion,
+        };
+        const newReportItems = getReportDataItems(newReportFields);
+        const newReportHash = calcReportDataHash(newReportItems);
+
+        await oracle.connect(admin).setConsensusVersion(newConsensusVersion);
+        await consensus.advanceTimeToNextFrameStart();
+        await consensus.connect(member1).submitReport(newReportFields.refSlot, newReportHash, newConsensusVersion);
+
+        const txNewVersion = await oracle.connect(member1).submitReportData(newReportFields, oracleVersion);
+        await expect(txNewVersion).to.emit(oracle, "ProcessingStarted").withArgs(newReportFields.refSlot, anyValue);
+      });
+    });
+
+    context("enforces module ids sorting order", () => {
+      it("should revert if incorrect stakingModuleIdsWithNewlyExitedValidators order (when next number in list is less than previous)", async () => {
+        const { newReportFields } = await prepareNextReportInNextFrame({
+          ...reportFields,
+          stakingModuleIdsWithNewlyExitedValidators: [2, 1],
+          numExitedValidatorsByStakingModule: [3, 4],
+        });
+
+        await expect(
+          oracle.connect(member1).submitReportData(newReportFields, oracleVersion),
+        ).to.be.revertedWithCustomError(oracle, "InvalidExitedValidatorsData");
+      });
+
+      it("should revert if incorrect stakingModuleIdsWithNewlyExitedValidators order (when next number in list equals to previous)", async () => {
+        const { newReportFields } = await prepareNextReportInNextFrame({
+          ...reportFields,
+          stakingModuleIdsWithNewlyExitedValidators: [1, 1],
+          numExitedValidatorsByStakingModule: [3, 4],
+        });
+
+        await expect(
+          oracle.connect(member1).submitReportData(newReportFields, oracleVersion),
+        ).to.be.revertedWithCustomError(oracle, "InvalidExitedValidatorsData");
+      });
+
+      it("should should allow calling if correct extra data list moduleId", async () => {
+        const { newReportFields } = await prepareNextReportInNextFrame({
+          ...reportFields,
+          stakingModuleIdsWithNewlyExitedValidators: [1, 2],
+          numExitedValidatorsByStakingModule: [3, 4],
+        });
+
+        const tx = await oracle.connect(member1).submitReportData(newReportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(newReportFields.refSlot, anyValue);
+      });
+    });
+
+    context("checks data hash", () => {
+      it("reverts with UnexpectedDataHash", async () => {
+        const incorrectReportFields = {
+          ...reportFields,
+          clValidatorsBalanceGwei: getBigInt(reportFields.clValidatorsBalanceGwei) - ONE_GWEI,
+        };
+        const incorrectReportItems = getReportDataItems(incorrectReportFields);
+
+        const correctDataHash = calcReportDataHash(reportItems);
+        const incorrectDataHash = calcReportDataHash(incorrectReportItems);
+
+        await expect(oracle.connect(member1).submitReportData(incorrectReportFields, oracleVersion))
+          .to.be.revertedWithCustomError(oracle, "UnexpectedDataHash")
+          .withArgs(correctDataHash, incorrectDataHash);
+      });
+
+      it("submits if data successfully pass hash validation", async () => {
+        const tx = await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(reportFields.refSlot, anyValue);
+      });
+    });
+
+    context("enforces data safety boundaries", () => {
+      it("passes fine when extra data do not feet in a single third phase transaction", async () => {
+        const MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION = 1;
+
+        expect(reportFields.extraDataItemsCount).to.be.greaterThan(MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION);
+
+        await sanityChecker
+          .connect(admin)
+          .grantRole(await sanityChecker.MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION_ROLE(), admin.address);
+        await sanityChecker.connect(admin).setMaxItemsPerExtraDataTransaction(MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION);
+
+        expect((await sanityChecker.getOracleReportLimits()).maxItemsPerExtraDataTransaction).to.equal(
+          MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION,
+        );
+
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+      });
+
+      it("passes fine when extra data feet in a single third phase transaction", async () => {
+        const MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION = reportFields.extraDataItemsCount;
+
+        await sanityChecker
+          .connect(admin)
+          .grantRole(await sanityChecker.MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION_ROLE(), admin.address);
+        await sanityChecker.connect(admin).setMaxItemsPerExtraDataTransaction(MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION);
+
+        expect((await sanityChecker.getOracleReportLimits()).maxItemsPerExtraDataTransaction).to.equal(
+          MAX_ITEMS_PER_EXTRA_DATA_TRANSACTION,
+        );
+
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+      });
+
+      it("reverts with InvalidExitedValidatorsData if counts of stakingModuleIds and numExitedValidatorsByStakingModule does not match", async () => {
+        const { newReportFields } = await prepareNextReportInNextFrame({
+          ...reportFields,
+          stakingModuleIdsWithNewlyExitedValidators: [1, 2],
+          numExitedValidatorsByStakingModule: [3],
+        });
+        await expect(
+          oracle.connect(member1).submitReportData(newReportFields, oracleVersion),
+        ).to.be.revertedWithCustomError(oracle, "InvalidExitedValidatorsData");
+      });
+
+      it("reverts with InvalidExitedValidatorsData if any record for number of exited validators equals 0", async () => {
+        const { newReportFields } = await prepareNextReportInNextFrame({
+          ...reportFields,
+          stakingModuleIdsWithNewlyExitedValidators: [1, 2],
+          numExitedValidatorsByStakingModule: [3, 0],
+        });
+        await expect(
+          oracle.connect(member1).submitReportData(newReportFields, oracleVersion),
+        ).to.be.revertedWithCustomError(oracle, "InvalidExitedValidatorsData");
+      });
+
+      it("reverts with ExitedEthAmountPerDayLimitExceeded if exited ETH amount per day limit is reached", async () => {
+        const totalExitedValidators: bigint = reportFields.numExitedValidatorsByStakingModule.reduce<bigint>(
+          (sum, curr) => sum + getBigInt(curr),
+          0n,
+        );
+        const exitingRateLimit = 0n;
+        await sanityChecker.grantRole(
+          await sanityChecker.EXITED_ETH_AMOUNT_PER_DAY_LIMIT_MANAGER_ROLE(),
+          admin.address,
+        );
+        await sanityChecker.setExitedEthAmountPerDayLimit(exitingRateLimit);
+
+        const limits = await sanityChecker.getOracleReportLimits();
+        expect(limits.exitedEthAmountPerDayLimit).to.equal(exitingRateLimit);
+
+        const refSlotDelta = reportFields.refSlot - (await oracle.getLastProcessingRefSlot());
+        const timeElapsed = refSlotDelta * SECONDS_PER_SLOT;
+        const newlyExitedValidatorsEthAmount =
+          totalExitedValidators * limits.exitedValidatorEthAmountLimit * 10n ** 18n;
+        const newlyExitedValidatorsEthAmountPerDay =
+          timeElapsed === 0n
+            ? newlyExitedValidatorsEthAmount * 86_400n
+            : (newlyExitedValidatorsEthAmount * 86_400n) / timeElapsed;
+        const exitedEthAmountPerDayLimitWithConsolidationInWei =
+          (limits.exitedEthAmountPerDayLimit + limits.consolidationEthAmountPerDayLimit) * 2n * 10n ** 18n;
+
+        await expect(oracle.connect(member1).submitReportData(reportFields, oracleVersion))
+          .to.be.revertedWithCustomError(sanityChecker, "ExitedEthAmountPerDayLimitExceeded")
+          .withArgs(exitedEthAmountPerDayLimitWithConsolidationInWei, newlyExitedValidatorsEthAmountPerDay);
+      });
+    });
+
+    context("delivers the data to corresponded contracts", () => {
+      it("should call handleOracleReport on Accounting", async () => {
+        expect((await mockAccounting.lastCall__handleOracleReport()).callCount).to.equal(0);
+        await consensus.setTime(deadline);
+        const tx = await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(reportFields.refSlot, anyValue);
+
+        const lastOracleReportToAccounting = await mockAccounting.lastCall__handleOracleReport();
+
+        expect(lastOracleReportToAccounting.callCount).to.equal(1);
+        expect(lastOracleReportToAccounting.arg.timestamp).to.equal(
+          GENESIS_TIME + reportFields.refSlot * SECONDS_PER_SLOT,
+        );
+        expect(lastOracleReportToAccounting.callCount).to.equal(1);
+        expect(lastOracleReportToAccounting.arg.timestamp).to.equal(
+          GENESIS_TIME + reportFields.refSlot * SECONDS_PER_SLOT,
+        );
+
+        expect(lastOracleReportToAccounting.arg.clValidatorsBalance).to.equal(
+          reportFields.clValidatorsBalanceGwei + "000000000",
+        );
+        expect(lastOracleReportToAccounting.arg.clPendingBalance).to.equal(
+          reportFields.clPendingBalanceGwei + "000000000",
+        );
+        expect(lastOracleReportToAccounting.arg.withdrawalVaultBalance).to.equal(reportFields.withdrawalVaultBalance);
+        expect(lastOracleReportToAccounting.arg.elRewardsVaultBalance).to.equal(reportFields.elRewardsVaultBalance);
+        expect(lastOracleReportToAccounting.arg.withdrawalFinalizationBatches.map(Number)).to.have.ordered.members(
+          reportFields.withdrawalFinalizationBatches.map(Number),
+        );
+      });
+
+      it("should call updateExitedValidatorsCountByStakingModule on StakingRouter", async () => {
+        expect((await mockStakingRouter.lastCall_updateExitedKeysByModule()).callCount).to.equal(0);
+        await consensus.setTime(deadline);
+        const tx = await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(reportFields.refSlot, anyValue);
+
+        const lastOracleReportToStakingRouter = await mockStakingRouter.lastCall_updateExitedKeysByModule();
+
+        expect(lastOracleReportToStakingRouter.callCount).to.equal(1);
+        expect(lastOracleReportToStakingRouter.moduleIds.map(Number)).to.have.ordered.members(
+          reportFields.stakingModuleIdsWithNewlyExitedValidators.map(Number),
+        );
+        expect(lastOracleReportToStakingRouter.exitedKeysCounts.map(Number)).to.have.ordered.members(
+          reportFields.numExitedValidatorsByStakingModule.map(Number),
+        );
+      });
+
+      it("does not calling StakingRouter.updateExitedKeysByModule if lists of exited validators is empty", async () => {
+        const { newReportFields } = await prepareNextReportInNextFrame({
+          ...reportFields,
+          stakingModuleIdsWithNewlyExitedValidators: [],
+          numExitedValidatorsByStakingModule: [],
+        });
+        const tx = await oracle.connect(member1).submitReportData(newReportFields, oracleVersion);
+        await expect(tx).to.emit(oracle, "ProcessingStarted").withArgs(newReportFields.refSlot, anyValue);
+        const lastOracleReportToStakingRouter = await mockStakingRouter.lastCall_updateExitedKeysByModule();
+        expect(lastOracleReportToStakingRouter.callCount).to.equal(0);
+      });
+
+      it("should call onOracleReport on WithdrawalQueue", async () => {
+        const prevProcessingRefSlot = await oracle.getLastProcessingRefSlot();
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        const currentProcessingRefSlot = await oracle.getLastProcessingRefSlot();
+        const lastCall = await mockWithdrawalQueue.lastCall__onOracleReport();
+        expect(lastCall.callCount).to.equal(1);
+        expect(lastCall.isBunkerMode).to.equal(reportFields.isBunkerMode);
+        expect(lastCall.prevReportTimestamp).to.equal(GENESIS_TIME + prevProcessingRefSlot * SECONDS_PER_SLOT);
+        expect(lastCall.currentReportTimestamp).to.equal(GENESIS_TIME + currentProcessingRefSlot * SECONDS_PER_SLOT);
+      });
+    });
+
+    context("warns when prev extra data has not been processed yet", () => {
+      it("emits WarnExtraDataIncompleteProcessing", async () => {
+        await consensus.setTime(deadline);
+        const prevRefSlot = Number((await consensus.getCurrentFrame()).refSlot);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await consensus.advanceTimeToNextFrameStart();
+        const nextRefSlot = Number((await consensus.getCurrentFrame()).refSlot);
+        const tx = await consensus.connect(member1).submitReport(nextRefSlot, HASH_1, AO_CONSENSUS_VERSION);
+        await expect(tx)
+          .to.emit(oracle, "WarnExtraDataIncompleteProcessing")
+          .withArgs(prevRefSlot, 0, extraDataItems.length);
+      });
+    });
+
+    context("enforces extra data format", () => {
+      it("should revert on invalid extra data format", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+
+        const nextRefSlot = reportFields.refSlot + SLOTS_PER_FRAME;
+        const changedReportFields = {
+          ...reportFields,
+          refSlot: nextRefSlot,
+          extraDataFormat: EXTRA_DATA_FORMAT_LIST + 1n,
+        };
+        const changedReportItems = getReportDataItems(changedReportFields);
+
+        const changedReportHash = calcReportDataHash(changedReportItems);
+        await consensus.advanceTimeToNextFrameStart();
+        await consensus.connect(member1).submitReport(nextRefSlot, changedReportHash, AO_CONSENSUS_VERSION);
+
+        await expect(oracle.connect(member1).submitReportData(changedReportFields, oracleVersion))
+          .to.be.revertedWithCustomError(oracle, "UnsupportedExtraDataFormat")
+          .withArgs(EXTRA_DATA_FORMAT_LIST + 1n);
+      });
+
+      it("should revert on non-empty format but zero length", async () => {
+        await consensus.setTime(deadline);
+        const { refSlot } = await consensus.getCurrentFrame();
+        const newReportFields = getReportFields({
+          refSlot: refSlot,
+          extraDataItemsCount: 0,
+        });
+        const newReportItems = getReportDataItems(newReportFields);
+        const newReportHash = calcReportDataHash(newReportItems);
+        await consensus.connect(member1).submitReport(refSlot, newReportHash, AO_CONSENSUS_VERSION);
+        await expect(
+          oracle.connect(member1).submitReportData(newReportFields, oracleVersion),
+        ).to.be.revertedWithCustomError(oracle, "ExtraDataItemsCountCannotBeZeroForNonEmptyData");
+      });
+
+      it("should revert on non-empty format but zero hash", async () => {
+        await consensus.setTime(deadline);
+        const { refSlot } = await consensus.getCurrentFrame();
+        const newReportFields = getReportFields({
+          refSlot: refSlot,
+          extraDataHash: ZeroHash,
+        });
+        const newReportItems = getReportDataItems(newReportFields);
+        const newReportHash = calcReportDataHash(newReportItems);
+        await consensus.connect(member1).submitReport(refSlot, newReportHash, AO_CONSENSUS_VERSION);
+        await expect(
+          oracle.connect(member1).submitReportData(newReportFields, oracleVersion),
+        ).to.be.revertedWithCustomError(oracle, "ExtraDataHashCannotBeZeroForNonEmptyData");
+      });
+    });
+
+    context("enforces zero extraData fields for the empty format", () => {
+      it("should revert for non empty ExtraDataHash", async () => {
+        await consensus.setTime(deadline);
+        const { refSlot } = await consensus.getCurrentFrame();
+        const nonZeroHash = keccakFromString("nonZeroHash");
+        const newReportFields = getReportFields({
+          refSlot: refSlot,
+          isBunkerMode: false,
+          extraDataFormat: EXTRA_DATA_FORMAT_EMPTY,
+          extraDataHash: nonZeroHash,
+          extraDataItemsCount: 0,
+        });
+        const newReportItems = getReportDataItems(newReportFields);
+        const newReportHash = calcReportDataHash(newReportItems);
+        await consensus.connect(member1).submitReport(refSlot, newReportHash, AO_CONSENSUS_VERSION);
+        await expect(oracle.connect(member1).submitReportData(newReportFields, oracleVersion))
+          .to.be.revertedWithCustomError(oracle, "UnexpectedExtraDataHash")
+          .withArgs(ZeroHash, nonZeroHash);
+      });
+
+      it("should revert for non zero ExtraDataLength", async () => {
+        await consensus.setTime(deadline);
+        const { refSlot } = await consensus.getCurrentFrame();
+        const newReportFields = getReportFields({
+          refSlot: refSlot,
+          isBunkerMode: false,
+          extraDataFormat: EXTRA_DATA_FORMAT_EMPTY,
+          extraDataHash: ZeroHash,
+          extraDataItemsCount: 10,
+        });
+        const newReportItems = getReportDataItems(newReportFields);
+        const newReportHash = calcReportDataHash(newReportItems);
+        await consensus.connect(member1).submitReport(refSlot, newReportHash, AO_CONSENSUS_VERSION);
+        await expect(oracle.connect(member1).submitReportData(newReportFields, oracleVersion))
+          .to.be.revertedWithCustomError(oracle, "UnexpectedExtraDataItemsCount")
+          .withArgs(0, 10);
+      });
+    });
+
+    context("ExtraDataProcessingState", () => {
+      it("should be empty from start", async () => {
+        const data = await oracle.getExtraDataProcessingState();
+        expect(data.refSlot).to.equal(0);
+        expect(data.dataFormat).to.equal(0);
+        expect(data.itemsCount).to.equal(0);
+        expect(data.itemsProcessed).to.equal(0);
+        expect(data.lastSortingKey).to.equal(0);
+        expect(data.dataHash).to.equal(ZeroHash);
+      });
+
+      it("should be filled with report data after submitting", async () => {
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        const data = await oracle.getExtraDataProcessingState();
+        expect(data.refSlot).to.equal(reportFields.refSlot);
+        expect(data.dataFormat).to.equal(reportFields.extraDataFormat);
+        expect(data.itemsCount).to.equal(reportFields.extraDataItemsCount);
+        expect(data.itemsProcessed).to.equal(0);
+        expect(data.lastSortingKey).to.equal(0);
+        expect(data.dataHash).to.equal(reportFields.extraDataHash);
+      });
+    });
+
+    context("Balance-based accounting", () => {
+      it("should revert with InvalidClBalancesData if a staking module id does not exist", async () => {
+        const { newReportFields } = await prepareNextReportInNextFrame(
+          getReportFields({
+            stakingModuleIdsWithUpdatedBalance: [999],
+            validatorBalancesGweiByStakingModule: [300n * ONE_GWEI],
+          }),
+        );
+
+        await expect(
+          oracle.connect(member1).submitReportData(newReportFields, oracleVersion),
+        ).to.be.revertedWithCustomError(mockStakingRouter, "InvalidValidatorBalancesReport");
+      });
+
+      it("should accept different balance values", async () => {
+        await consensus.setTime(deadline);
+        await expect(oracle.connect(member1).submitReportData(reportFields, oracleVersion)).not.to.be.reverted;
+      });
+
+      it("should process balance data correctly", async () => {
+        expect((await mockAccounting.lastCall__handleOracleReport()).callCount).to.equal(0);
+
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+
+        const lastCall = await mockAccounting.lastCall__handleOracleReport();
+        expect(lastCall.callCount).to.equal(1);
+        expect(lastCall.arg.clValidatorsBalance).to.equal(BigInt(reportFields.clValidatorsBalanceGwei) * 1000000000n);
+        expect(lastCall.arg.clPendingBalance).to.equal(BigInt(reportFields.clPendingBalanceGwei) * 1000000000n);
+      });
+
+      it("should accept zero active balance", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        // Router mock stores validators balance only; pending is seeded on the Lido mock.
+        await mockStakingRouter.reportValidatorBalancesByStakingModule([1], [300n * ONE_GWEI]);
+        await mockLido.mock__setClValidatorsBalance(300n * 10n ** 18n);
+        await mockLido.mock__setClPendingBalance(64n * 10n ** 18n);
+
+        const nextReport = await prepareNextReportInNextFrame(
+          getReportFields({
+            clValidatorsBalanceGwei: 0n,
+            clPendingBalanceGwei: 64n * ONE_GWEI,
+            validatorBalancesGweiByStakingModule: [0n],
+          }),
+        );
+
+        await consensus.setTime(deadline);
+        await expect(oracle.connect(member1).submitReportData(nextReport.newReportFields, oracleVersion)).not.to.be
+          .reverted;
+      });
+
+      it("should accept zero pending balance", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        // Seed the previous router balances to the target values; this case checks zero pending itself, not one-frame growth.
+        await mockStakingRouter.reportValidatorBalancesByStakingModule([1], [1000n * ONE_GWEI]);
+        await mockLido.mock__setClValidatorsBalance(1000n * 10n ** 18n);
+        await mockLido.mock__setClPendingBalance(0n);
+
+        const nextReport = await prepareNextReportInNextFrame(
+          getReportFields({
+            clValidatorsBalanceGwei: 1000n * ONE_GWEI,
+            clPendingBalanceGwei: 0n,
+            validatorBalancesGweiByStakingModule: [1000n * ONE_GWEI],
+          }),
+        );
+
+        await consensus.setTime(deadline);
+        await expect(oracle.connect(member1).submitReportData(nextReport.newReportFields, oracleVersion)).not.to.be
+          .reverted;
+      });
+
+      it("should accept large balance values", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await mockStakingRouter.reportValidatorBalancesByStakingModule([1], [60000n * ONE_GWEI]);
+        await mockLido.mock__setClValidatorsBalance(60000n * 10n ** 18n);
+        await mockLido.mock__setClPendingBalance(5000n * 10n ** 18n);
+
+        const nextReport = await prepareNextReportInNextFrame(
+          getReportFields({
+            clValidatorsBalanceGwei: 60000n * ONE_GWEI,
+            clPendingBalanceGwei: 5000n * ONE_GWEI,
+            validatorBalancesGweiByStakingModule: [60000n * ONE_GWEI],
+          }),
+        );
+
+        await consensus.setTime(deadline);
+        await expect(oracle.connect(member1).submitReportData(nextReport.newReportFields, oracleVersion)).not.to.be
+          .reverted;
+      });
+
+      it("should handle pending larger than active", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await mockStakingRouter.reportValidatorBalancesByStakingModule([1], [300n * ONE_GWEI]);
+        await mockLido.mock__setClValidatorsBalance(300n * 10n ** 18n);
+        await mockLido.mock__setClPendingBalance(500n * 10n ** 18n);
+
+        const nextReport = await prepareNextReportInNextFrame(
+          getReportFields({
+            clValidatorsBalanceGwei: 100n * ONE_GWEI,
+            clPendingBalanceGwei: 500n * ONE_GWEI,
+            validatorBalancesGweiByStakingModule: [100n * ONE_GWEI],
+          }),
+        );
+
+        await consensus.setTime(deadline);
+        await expect(oracle.connect(member1).submitReportData(nextReport.newReportFields, oracleVersion)).not.to.be
+          .reverted;
+      });
+
+      it("should convert gwei to wei correctly", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await mockStakingRouter.reportValidatorBalancesByStakingModule([1], [300n * ONE_GWEI]);
+        await mockLido.mock__setClValidatorsBalance(300n * 10n ** 18n);
+        await mockLido.mock__setClPendingBalance(456n * 10n ** 18n);
+
+        const nextReport = await prepareNextReportInNextFrame(
+          getReportFields({
+            clValidatorsBalanceGwei: 123n * ONE_GWEI,
+            clPendingBalanceGwei: 456n * ONE_GWEI,
+            validatorBalancesGweiByStakingModule: [123n * ONE_GWEI],
+          }),
+        );
+
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(nextReport.newReportFields, oracleVersion);
+
+        const lastCall = await mockAccounting.lastCall__handleOracleReport();
+        expect(lastCall.arg.clValidatorsBalance).to.equal(123n * ONE_GWEI * 1000000000n);
+        expect(lastCall.arg.clPendingBalance).to.equal(456n * ONE_GWEI * 1000000000n);
+      });
+
+      it("should accept both balances zero", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+
+        const nextReport = await prepareNextReportInNextFrame(
+          getReportFields({
+            clValidatorsBalanceGwei: 0n,
+            clPendingBalanceGwei: 0n,
+            validatorBalancesGweiByStakingModule: [0n],
+          }),
+        );
+
+        await consensus.setTime(deadline);
+        await expect(oracle.connect(member1).submitReportData(nextReport.newReportFields, oracleVersion)).not.to.be
+          .reverted;
+      });
+
+      it("should accept minimal gwei values", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+
+        const nextReport = await prepareNextReportInNextFrame(
+          getReportFields({
+            clValidatorsBalanceGwei: 1n,
+            clPendingBalanceGwei: 1n,
+            validatorBalancesGweiByStakingModule: [1n],
+          }),
+        );
+
+        await consensus.setTime(deadline);
+        await expect(oracle.connect(member1).submitReportData(nextReport.newReportFields, oracleVersion)).not.to.be
+          .reverted;
+      });
+
+      it("should handle realistic scenarios", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+        await mockStakingRouter.reportValidatorBalancesByStakingModule([1], [30000n * ONE_GWEI]);
+        await mockLido.mock__setClValidatorsBalance(30000n * 10n ** 18n);
+        await mockLido.mock__setClPendingBalance(1000n * 10n ** 18n);
+
+        const nextReport = await prepareNextReportInNextFrame(
+          getReportFields({
+            clValidatorsBalanceGwei: 30000n * ONE_GWEI,
+            clPendingBalanceGwei: 1000n * ONE_GWEI,
+            validatorBalancesGweiByStakingModule: [30000n * ONE_GWEI],
+          }),
+        );
+
+        await consensus.setTime(deadline);
+        await expect(oracle.connect(member1).submitReportData(nextReport.newReportFields, oracleVersion)).not.to.be
+          .reverted;
+      });
+
+      it("should verify ReportValues structure", async () => {
+        await consensus.setTime(deadline);
+        await oracle.connect(member1).submitReportData(reportFields, oracleVersion);
+
+        const lastCall = await mockAccounting.lastCall__handleOracleReport();
+
+        expect(lastCall.arg).to.be.an("array");
+        expect(lastCall.arg).to.have.length(9);
+        expect(lastCall.arg[0]).to.be.a("bigint");
+        expect(lastCall.arg[1]).to.be.a("bigint");
+        expect(lastCall.arg[2]).to.be.a("bigint");
+        expect(lastCall.arg[3]).to.be.a("bigint");
+        expect(lastCall.arg[2]).to.equal(BigInt(reportFields.clValidatorsBalanceGwei) * 1000000000n);
+        expect(lastCall.arg[3]).to.equal(BigInt(reportFields.clPendingBalanceGwei) * 1000000000n);
+      });
+    });
+  });
+});

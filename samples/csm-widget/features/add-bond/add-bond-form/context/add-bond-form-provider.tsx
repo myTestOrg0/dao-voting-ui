@@ -1,0 +1,33 @@
+import { FC, PropsWithChildren } from 'react';
+import { FormProvider, useForm } from 'react-hook-form';
+import {
+  FormControllerProvider,
+  useFlowSubmit,
+} from 'shared/hook-form/form-controller';
+import { AddBondUpdater } from './add-bond-updater';
+import { type AddBondFormInputType } from './types';
+import { useAddBondDefaultValues } from './use-add-bond-default-values';
+import { useAddBondFlowResolver } from './use-add-bond-flow';
+import { useAddBondValidation } from './use-add-bond-validation';
+
+export const AddBondFormProvider: FC<PropsWithChildren> = ({ children }) => {
+  const resolver = useAddBondValidation();
+  const defaultValues = useAddBondDefaultValues();
+
+  const formObject = useForm<AddBondFormInputType>({
+    defaultValues,
+    resolver,
+    mode: 'onChange',
+  });
+
+  const submitter = useFlowSubmit(useAddBondFlowResolver());
+
+  return (
+    <FormProvider {...formObject}>
+      <FormControllerProvider submitter={submitter} formName="addBond">
+        <AddBondUpdater />
+        {children}
+      </FormControllerProvider>
+    </FormProvider>
+  );
+};

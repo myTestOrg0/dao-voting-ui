@@ -1,0 +1,55 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yalc
+yalc.lock
+tsconfig.tsbuildinfo
+
+# playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+.playwright-mcp/
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# misc
+.DS_Store
+dev-cm
+
+# env
+.env*
+!.env.example
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+#ide
+.vscode
+.idea
+.claude/*
+!.claude/skills/
+docs/superpowers/
+.mcp.json
+.qodo
+**/.browser_context**
+
+deposit_data.json
+local_fork_config.json
+cl-mock.json
+.qa-panel.state.json
+*.walletPresets.state.json

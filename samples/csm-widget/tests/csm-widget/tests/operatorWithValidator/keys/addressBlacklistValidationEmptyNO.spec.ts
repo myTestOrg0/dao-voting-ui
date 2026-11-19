@@ -1,0 +1,59 @@
+import { expect } from '@playwright/test';
+import { test } from '../../test.fixture';
+import { EPIC, suite } from 'tests/csm-widget/consts/qase.const';
+import { TokenSymbol } from 'tests/shared/consts/common.const';
+import { KeysPage } from 'tests/csm-widget/pages';
+import { TxModal } from 'tests/csm-widget/pages/elements/common/element.txProgressModal';
+import { LOW_TIMEOUT } from 'tests/shared/consts/timeouts';
+import { OFAC_MODAL_TEXT } from 'tests/shared/consts/texts.const';
+import { qase } from 'playwright-qase-reporter/playwright';
+import { PRESETS } from 'tests/csm-widget/config/walletSetup';
+
+test.use({ secretPhrase: PRESETS.EMPTY_OPERATOR.secretPhrase });
+
+test.describe(
+  ...suite({
+    epic: EPIC.keys,
+    feature: 'Submit keys',
+    story: 'Address blacklist (empty operator)',
+  }),
+  async () => {
+    let txModal: TxModal;
+
+    test.beforeAll(async ({ widgetService }) => {
+      await widgetService.page.goto('/');
+      txModal = new TxModal(widgetService.page);
+
+      await widgetService.mockValidationAddressRequest();
+    });
+
+    test.afterAll(async ({ widgetService }) => {
+      await widgetService.page.unrouteAll();
+    });
+
+    test(
+      qase(284, 'Should open access denied modal after added 1 key'),
+      async ({ widgetService, keysGeneratorService }) => {
+        await test.step('Submit keys', async () => {
+          const keysPage = new KeysPage(widgetService.page);
+          await keysPage.submitPage.open();
+
+          const keys = keysGeneratorService.generateKeys();
+
+          const bondTokenElement = keysPage.submitPage.getBondTokenElement(
+            TokenSymbol.ETH,
+          );
+          await bondTokenElement.click();
+          await keysPage.submitPage.fillKeys(keys);
+          await keysPage.submitPage.page.waitForTimeout(LOW_TIMEOUT);
+          await keysPage.submitPage.confirmKeysReady.click();
+          await keysPage.submitPage.submitKeysButton.click();
+        });
+
+        await test.step('Check the warning OFAC modal', async () => {
+          await expect(txModal.modal).toContainText(OFAC_MODAL_TEXT);
+        });
+      },
+    );
+  },
+);

@@ -1,0 +1,111 @@
+import { Text } from '@lidofinance/lido-ui';
+import { DATA_UNAVAILABLE } from 'consts';
+import { useSmSDK } from 'modules/web3';
+import { FC, useCallback } from 'react';
+import { useFormContext, useFormState, useWatch } from 'react-hook-form';
+import { Pubkey } from 'shared/components';
+import {
+  DataCell,
+  DataError,
+  DeleteButton,
+  HeaderCell,
+  TableContainer,
+  TableHeader,
+  TableRow,
+} from './styles';
+import { DepositDataInputType } from './use-parse-deposit-data';
+
+// TODO: refactor to separate component and hook
+export const DepositDataParsed: FC = () => {
+  const { depositData: sdk } = useSmSDK();
+
+  const { setValue, setError, clearErrors } =
+    useFormContext<DepositDataInputType>();
+
+  // Subscribe to errors here — reading them off useFormContext() is not
+  // reactive in a child, leaving the row stale after async validation.
+  const { errors, isValidating, isSubmitting } =
+    useFormState<DepositDataInputType>({
+      name: ['depositData', 'rawDepositData'],
+    });
+
+  const depositDataErrors = errors.depositData?.types;
+
+  const [depositData, rawDepositData] = useWatch<
+    DepositDataInputType,
+    ['depositData', 'rawDepositData']
+  >({
+    name: ['depositData', 'rawDepositData'],
+  });
+
+  const remove = useCallback(
+    (index: number) => {
+      const result = sdk.removeKey(rawDepositData ?? '', index);
+
+      if (result.success && result.json !== undefined) {
+        clearErrors('rawDepositData');
+        clearErrors('depositData');
+        setValue('rawDepositData', result.json, {
+          shouldValidate: true,
+        });
+      } else {
+        setError('rawDepositData', {
+          type: 'REMOVE_KEY_ERROR',
+          message: result.error || 'Failed to remove key',
+        });
+      }
+    },
+    [sdk, rawDepositData, setValue, setError, clearErrors],
+  );
+
+  return (
+    <TableContainer>
+      <TableHeader>
+        <HeaderCell>Recognized Pubkey</HeaderCell>
+        <HeaderCell>Key number</HeaderCell>
+        <HeaderCell>Errors detected</HeaderCell>
+        <HeaderCell>Delete key</HeaderCell>
+      </TableHeader>
+
+      {depositData.map(({ pubkey }, index) => {
+        const errors = depositDataErrors?.[index] as string[] | undefined;
+        const hasError = !!errors?.length;
+
+        return (
+          <TableRow key={pubkey} data-testid="deposit-data-row">
+            <DataCell $error={hasError} data-testid="deposit-data-pubkey">
+              <Pubkey
+                pubkey={pubkey || DATA_UNAVAILABLE}
+                color={hasError ? 'error' : 'default'}
+              />
+            </DataCell>
+            <DataCell $error={hasError} data-testid="deposit-data-index">
+              #{index + 1}
+            </DataCell>
+            <DataCell
+              $error={hasError}
+              data-testid="deposit-data-error-detected"
+            >
+              {hasError ? 'Yes' : 'No'}
+            </DataCell>
+            <DataCell data-testid="deposit-data-delete-key">
+              <DeleteButton
+                onClick={() => remove(index)}
+                disabled={isValidating || isSubmitting}
+              />
+            </DataCell>
+            {hasError && (
+              <DataError data-testid="deposit-data-error">
+                {errors?.map((error) => (
+                  <Text key={error} color="secondary" size="xxs">
+                    {error}
+                  </Text>
+                ))}
+              </DataError>
+            )}
+          </TableRow>
+        );
+      })}
+    </TableContainer>
+  );
+};

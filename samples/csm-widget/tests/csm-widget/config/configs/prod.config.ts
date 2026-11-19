@@ -1,0 +1,58 @@
+import { forkPort } from 'tests/shared/config/forkPorts';
+import { BaseConfig } from './base.config';
+
+export class ProdConfig extends BaseConfig {
+  constructor() {
+    super();
+
+    this.standConfig = {
+      standType: 'prod',
+      standUrl: 'https://csm.lido.fi',
+      matomoUrl: 'https://matomo.lido.fi/matomo.php',
+      feedbackFormUrl: 'https://forms.gle/GL9RYeV2g4px58Sv8',
+      networkConfig: {
+        chainId: 1,
+        tokenSymbol: 'ETH',
+        chainName: 'Ethereum Mainnet',
+        rpcUrl: this.getRpcUrl('prod'),
+        scan: 'https://etherscan.io/',
+      },
+      nodeConfig: {
+        mockConfig: {
+          mockEnabled: true,
+          rpcUrlToMock: [`.*/api/rpc\\?chainId=1`],
+        },
+        rpcUrl: this.getRpcUrl('prod'),
+        derivationPath: "m/44'/60'/0'/0",
+        host: '127.0.0.1',
+        port: forkPort('mainnet'),
+      },
+      mockConfig: {
+        urls: {
+          csmSurveysApi: 'https://csm-survey-api.lido.tools',
+        },
+      },
+      monitoringConfig: {
+        urls: {
+          beaconchain: 'https://beaconcha.in',
+          operators: 'https://operators.lido.fi',
+          feesMonitoring: 'https://fees-monitoring.lido.fi',
+          csmSentinel: 'https://github.com/lidofinance/sm-sentinel',
+          beaconchainEntity: 'https://beaconcha.in',
+          rated: 'https://explorer.rated.network',
+          migaLabs: 'https://migalabs.io/entities',
+        },
+        stakingModuleIndex: 4,
+      },
+      keysGeneratorConfig: {
+        chain: 'mainnet',
+        withdrawalCredentials: '0xB9D7934878B5FB9610B3fE8A5e441e8fad7E293f',
+      },
+      ipfsConfig: {
+        gateway:
+          (process.env.IPFS_GATEWAY as `${string}/ipfs/`) ||
+          'http://127.0.0.1:8080/ipfs/',
+      },
+    };
+  }
+}

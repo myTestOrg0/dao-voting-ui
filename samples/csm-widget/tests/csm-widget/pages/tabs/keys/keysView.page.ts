@@ -1,0 +1,84 @@
+import { expect, Locator, Page, test } from '@playwright/test';
+import { BasePage } from '../../../../shared/pages/base.page';
+
+export class TableRow {
+  pubkeyCell: Locator;
+  statusCell: Locator;
+  statusCommentCell: Locator;
+  strikesCountCell: Locator;
+
+  constructor(tr: Locator) {
+    this.pubkeyCell = tr.getByTestId('pubkeyCell');
+    this.statusCell = tr.getByTestId('statusCell');
+    this.statusCommentCell = tr.getByTestId('statusCommentCell');
+    this.strikesCountCell = tr.getByTestId('strikesCountCell');
+  }
+}
+
+export class KeysViewPage {
+  page: Page;
+  base: BasePage;
+  viewKeysBlock: Locator;
+  table: Locator;
+  tableRows: Locator;
+  pageSizeSelect: Locator;
+  loader: Locator;
+
+  constructor(page: Page) {
+    this.page = page;
+    this.base = new BasePage(page);
+    this.viewKeysBlock = this.page.locator('[data-testid="viewKeysBlock"]');
+    this.table = this.viewKeysBlock.locator('tbody');
+    this.tableRows = this.viewKeysBlock.locator('tbody >> tr');
+    // lido-ui select with no test id: its read-only input shows "<n> rows"
+    this.pageSizeSelect = this.page.locator('input[value$=" rows"]');
+    this.loader = this.viewKeysBlock.getByTestId('loader');
+  }
+
+  async getAllTableRows() {
+    const rows = await this.tableRows.all();
+    const rowsObj = [];
+    for (const trRow of rows) {
+      rowsObj.push(new TableRow(trRow));
+    }
+    return rowsObj;
+  }
+
+  async getRowByStatus(status: string) {
+    const rows = await this.getAllTableRows();
+    for (const trRow of rows) {
+      const trStatus = await trRow.statusCell.textContent();
+      if (trStatus === status) {
+        return trRow;
+      }
+    }
+  }
+
+  // Locator-based: assertions on it wait for the row to appear
+  rowByStatus(status: string) {
+    return new TableRow(
+      this.tableRows
+        .filter({
+          has: this.page
+            .getByTestId('statusCell')
+            .getByText(status, { exact: true }),
+        })
+        .first(),
+    );
+  }
+
+  // 10 rows by default: the keys of a big operator sit on several pages
+  async showAllKeys() {
+    await test.step('Show 100 keys per page', async () => {
+      await this.pageSizeSelect.click();
+      await this.page.getByRole('option', { name: '100 rows' }).click();
+      await expect(this.pageSizeSelect).toHaveValue('100 rows');
+    });
+  }
+
+  async open() {
+    await test.step('Open keys view tab for Keys page', async () => {
+      await this.base.openWithRetry('/keys/view', this.viewKeysBlock);
+    });
+  }
+}

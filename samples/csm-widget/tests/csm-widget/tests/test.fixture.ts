@@ -1,0 +1,284 @@
+/* eslint-disable no-empty-pattern */
+import { BrowserService } from '@lidofinance/browser-service';
+import { test as base } from '@playwright/test';
+import { widgetFullConfig } from '../config';
+import { IConfig } from '../config/configs/base.config';
+import { REFUSE_CF_BLOCK_COOKIE } from '../../shared/config/storageState';
+import { LidoSDKClient } from 'tests/csm-widget/services/csmSDK.client';
+import { SdkService } from 'tests/shared/services/ethereumSDK.client';
+import { WidgetService } from 'tests/csm-widget/services/widget.service';
+import { mnemonicToAccount } from 'viem/accounts';
+import { FORK_WARM_UP_TIMEOUT } from 'tests/shared/consts/timeouts';
+import { MODULE_NAME } from '@lidofinance/lido-csm-sdk';
+import { ForkActionsService } from 'tests/shared/contracts/forkActions.service';
+import type { ChainName } from 'tests/shared/contracts/constants';
+import { warmUpForkedNode } from 'tests/shared/helpers/warmUpFork';
+import { HttpMockerService } from 'tests/shared/services/httpMocker.service';
+import { EvmNodeService } from 'tests/shared/services/evmNode.service';
+import { KeysGeneratorService } from 'tests/shared/services/keysGenerator.service';
+import { reportTagsToQase } from 'tests/shared/helpers/qaseTags';
+import { IpfsGatewayProxyService } from 'tests/shared/services/ipfsGatewayProxy.service';
+import { ClMockService } from 'tests/shared/services/clMock.service';
+
+type WorkerFixtures = {
+  // fixture-options
+  secretPhrase: string;
+  useFork: boolean;
+
+  autoConnectWallet: boolean;
+  browserWithWallet: BrowserService;
+  widgetService: WidgetService;
+  csmSDK: LidoSDKClient;
+  ethereumSDK: SdkService;
+  forkActionService: ForkActionsService;
+  httpMockerService: HttpMockerService;
+  evmNode: EvmNodeService;
+  ipfsGatewayProxy: IpfsGatewayProxyService;
+  clMock: ClMockService;
+};
+
+export const test = base.extend<
+  {
+    widgetConfig: IConfig;
+    keysGeneratorService: KeysGeneratorService;
+    qaseTags: void;
+  },
+  WorkerFixtures
+>({
+  qaseTags: [reportTagsToQase, { auto: true }],
+
+  // fixture-options
+  useFork: [
+    async ({}, use) => {
+      await use(true);
+    },
+    { scope: 'worker', option: true },
+  ],
+  forkActionService: [
+    async ({}, use) => {
+      const { nodeConfig, keysGeneratorConfig } = widgetFullConfig.standConfig;
+      await use(
+        new ForkActionsService({
+          rpcUrl: `http://${nodeConfig.host}:${nodeConfig.port}`,
+          chain: keysGeneratorConfig.chain as ChainName,
+          module: MODULE_NAME.CSM,
+        }),
+      );
+    },
+    { scope: 'worker' },
+  ],
+  autoConnectWallet: [
+    async ({}, use) => {
+      await use(true);
+    },
+    { scope: 'worker' },
+  ],
+  secretPhrase: [
+    async ({}, use) => {
+      await use(widgetFullConfig.accountConfig.SECRET_PHRASE);
+    },
+    { scope: 'worker' },
+  ],
+  widgetConfig: async ({}, use) => {
+    await use(widgetFullConfig);
+  },
+  keysGeneratorService: async ({}, use) => {
+    await use(
+      new KeysGeneratorService(
+        widgetFullConfig.standConfig.keysGeneratorConfig,
+      ),
+    );
+  },
+
+  // fixture-methods
+  browserWithWallet: [
+    async (
+      { secretPhrase, useFork, csmSDK, ipfsGatewayProxy, clMock },
+      use,
+    ) => {
+      const forkRpcURL = `http://${widgetFullConfig.standConfig.nodeConfig.host}:${widgetFullConfig.standConfig.nodeConfig.port}`;
+      const rpcUrl = useFork
+        ? forkRpcURL
+        : widgetFullConfig.standConfig.networkConfig.rpcUrl;
+
+      const browserService = new BrowserService({
+        networkConfig: {
+          ...widgetFullConfig.standConfig.networkConfig,
+          rpcUrl,
+        },
+        accountConfig: {
+          ...widgetFullConfig.accountConfig,
+          SECRET_PHRASE: secretPhrase,
+        },
+        walletConfig: widgetFullConfig.walletConfig,
+        nodeConfig: {
+          ...widgetFullConfig.standConfig.nodeConfig,
+          useExternalFork: true,
+          warmUpCallback: warmUpForkedNode.bind(null, csmSDK, secretPhrase),
+        },
+        browserOptions: {
+          headless: true,
+          reducedMotion: 'reduce',
+          cookies: REFUSE_CF_BLOCK_COOKIE,
+        },
+      });
+
+      await browserService.initWalletSetup(useFork);
+
+      if (
+        useFork &&
+        secretPhrase !== widgetFullConfig.accountConfig.SECRET_PHRASE
+      ) {
+        const targetAddress = mnemonicToAccount(secretPhrase).address;
+        await browserService
+          .getWalletPage()
+          .changeWalletAccountByAddress?.(targetAddress);
+      }
+
+      if (useFork) {
+        // Operator didn't exist during the initial warmup — re-run so
+        // operator-specific calls (getBondBalance, getStethPoolData, etc.)
+        // are pre-cached in Anvil before the browser starts.
+        await warmUpForkedNode(csmSDK, secretPhrase);
+      }
+
+      await ipfsGatewayProxy.install(
+        browserService.getBrowserContextPage().context(),
+      );
+      await clMock.install(browserService.getBrowserContextPage().context());
+
+      // fulfilled locally so tests never hit the external validation API
+      await browserService
+        .getBrowserContextPage()
+        .context()
+        .route(new RegExp('.*/api/validation\\?.*'), async (route) => {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            json: { isValid: true },
+          });
+        });
+
+      await use(browserService);
+
+      await browserService.teardown();
+    },
+    { scope: 'worker', timeout: FORK_WARM_UP_TIMEOUT },
+  ],
+  widgetService: [
+    async ({ browserWithWallet, autoConnectWallet }, use) => {
+      const ws = new WidgetService(
+        browserWithWallet.getBrowserContextPage(),
+        browserWithWallet.getWalletPage(),
+      );
+      if (autoConnectWallet) await ws.connectWallet();
+      await use(ws);
+    },
+    { scope: 'worker' },
+  ],
+  csmSDK: [
+    async ({ useFork }, use) => {
+      const forkRpcURL = `http://${widgetFullConfig.standConfig.nodeConfig.host}:${widgetFullConfig.standConfig.nodeConfig.port}`;
+      const rpcUrl = useFork
+        ? forkRpcURL
+        : widgetFullConfig.standConfig.networkConfig.rpcUrl;
+
+      await use(new LidoSDKClient([rpcUrl]));
+    },
+    { scope: 'worker' },
+  ],
+  evmNode: [
+    async ({ useFork }, use) => {
+      const forkRpcURL = `http://${widgetFullConfig.standConfig.nodeConfig.host}:${widgetFullConfig.standConfig.nodeConfig.port}`;
+      const rpcUrl = useFork
+        ? forkRpcURL
+        : widgetFullConfig.standConfig.networkConfig.rpcUrl;
+
+      await use(new EvmNodeService(rpcUrl));
+    },
+    { scope: 'worker' },
+  ],
+  ethereumSDK: [
+    async ({ secretPhrase, useFork }, use) => {
+      const forkRpcURL = `http://${widgetFullConfig.standConfig.nodeConfig.host}:${widgetFullConfig.standConfig.nodeConfig.port}`;
+      const rpcUrl = useFork
+        ? forkRpcURL
+        : widgetFullConfig.standConfig.networkConfig.rpcUrl;
+
+      await use(
+        new SdkService(mnemonicToAccount(secretPhrase), {
+          ...widgetFullConfig.standConfig.networkConfig,
+          rpcUrl,
+        }),
+      );
+    },
+    { scope: 'worker' },
+  ],
+  httpMockerService: [
+    async ({ widgetService }, use) => {
+      await use(
+        new HttpMockerService(
+          widgetService.page,
+          // @ts-expect-error may be null
+          widgetFullConfig.standConfig.mockConfig,
+        ),
+      );
+    },
+    { scope: 'worker' },
+  ],
+  ipfsGatewayProxy: [
+    async ({}, use) => {
+      await use(
+        new IpfsGatewayProxyService(
+          widgetFullConfig.standConfig.ipfsConfig.gateway,
+        ),
+      );
+    },
+    { scope: 'worker' },
+  ],
+  clMock: [
+    async ({}, use) => {
+      await use(new ClMockService());
+    },
+    { scope: 'worker' },
+  ],
+});
+
+/**
+ * Skip a specific test before run. Playwright will not run the test with call `skipIf` if condition will be true.
+ *
+ * To skip a test use:
+ * - `test(title, {tag: ['@tag'], ...skipIf()}, callback)`
+ *
+ * Example:
+ *
+ * ```ts
+ *  test(
+ *    'Title of test',
+ *    {
+ *      tag: ['@tag'],
+ *      ...skipIf(
+ *        WIDGET_CONFIG.STAND_CONFIG.chainId !== 1,
+ *        "Holesky and others doesn't support ENS",
+ *      ),
+ *    },
+ *    async () => {
+ *      console.log();
+ *    },
+ *  );
+ *```
+ *
+ * @param condition - Test is marked as "skipped" when the condition is `true`.
+ * @param message  - Message that will be reflected in a test.
+ * @returns
+ */
+export const skipIf = (condition: boolean, message: string) => {
+  return condition
+    ? {
+        annotation: {
+          type: 'skip',
+          description: message,
+        },
+      }
+    : {};
+};

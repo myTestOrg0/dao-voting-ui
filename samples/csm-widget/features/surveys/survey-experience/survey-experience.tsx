@@ -1,0 +1,185 @@
+import { FC, useCallback } from 'react';
+import { trackMatomoFormEvent } from 'utils/track-matomo-event';
+import { FormProvider, useForm } from 'react-hook-form';
+import { FormTitle, SectionBlock, Stack, WhenLoaded } from 'shared/components';
+import {
+  NumberInputHookForm,
+  OptionsButtonsHookForm,
+  SubmitButtonHookForm,
+  TextInputHookForm,
+} from 'shared/hook-form/controls';
+import {
+  callSurvey,
+  isAuthError,
+  surveyRequest,
+  useOperatorSurvey,
+} from 'modules/surveys-sdk';
+import {
+  experienceFindOne,
+  experienceUpdate,
+} from 'modules/surveys-sdk/generated';
+import { Experience } from '../types';
+import {
+  ExperienceForm,
+  transformIncoming,
+  transformOutgoing,
+} from './transform';
+import { useModalStages } from './use-modal-stages';
+import { SurveysBackButton } from '../shared';
+
+export const SurveyExperience: FC = () => {
+  const { data, mutate } = useOperatorSurvey<ExperienceForm, Experience>(
+    'experience',
+    {
+      transformIncoming,
+      transformOutgoing,
+      get: ({ nodeOperatorId, token, signal }) =>
+        callSurvey(() =>
+          experienceFindOne({
+            ...surveyRequest(token, signal),
+            path: { nodeOperatorId },
+          }),
+        ),
+      update: (body, { nodeOperatorId, token }) =>
+        callSurvey(() =>
+          experienceUpdate({
+            ...surveyRequest(token),
+            path: { nodeOperatorId },
+            body,
+          }),
+        ),
+    },
+  );
+  const { txModalStages: modals } = useModalStages();
+
+  const formObject = useForm<ExperienceForm>({
+    values: data,
+  });
+
+  const otherModules = formObject.watch('otherModules');
+
+  const handleSubmit = useCallback(
+    async (data: ExperienceForm) => {
+      trackMatomoFormEvent('surveyExperience');
+      modals.pending();
+      try {
+        await mutate(data);
+        trackMatomoFormEvent('surveyExperience', 'success');
+        modals.success();
+      } catch (e) {
+        if (!isAuthError(e)) modals.failed(e);
+      }
+    },
+    [modals, mutate],
+  );
+
+  return (
+    <SectionBlock
+      title="Your validation experience"
+      mainPrefix={<SurveysBackButton />}
+    >
+      <FormProvider {...formObject}>
+        <WhenLoaded loading={formObject.formState.isLoading}>
+          <Stack direction="column">
+            <form
+              autoComplete="off"
+              onSubmit={formObject.handleSubmit(handleSubmit)}
+            >
+              <Stack direction="column" gap="xxl">
+                <Stack direction="column">
+                  <FormTitle>
+                    Are you a professional node operator or an independent
+                    staker?
+                  </FormTitle>
+                  <OptionsButtonsHookForm
+                    fieldName="professional"
+                    options={{
+                      on: 'Professional operator',
+                      off: 'Independent staker',
+                    }}
+                    rules={{ required: true }}
+                  />
+                </Stack>
+
+                <Stack direction="column">
+                  <FormTitle>
+                    Have you ever validated on Ethereum Mainnet before joining
+                    CSM?
+                  </FormTitle>
+                  <OptionsButtonsHookForm
+                    fieldName="validatedBefore"
+                    options={{ on: 'Yes', off: 'No' }}
+                    rules={{ required: true }}
+                  />
+                </Stack>
+
+                <Stack direction="column">
+                  <FormTitle>
+                    Are you an organization from the Curated Module or the
+                    Simple DVT Module in Lido?
+                  </FormTitle>
+                  <OptionsButtonsHookForm
+                    fieldName="otherModules"
+                    options={{ on: 'Yes', off: 'No' }}
+                    rules={{ required: true }}
+                  />
+                </Stack>
+
+                {otherModules === 'on' && (
+                  <Stack direction="column">
+                    <FormTitle>
+                      Which module you are participating in?
+                    </FormTitle>
+                    <OptionsButtonsHookForm
+                      fieldName="modules"
+                      options={{
+                        curated: 'Curated',
+                        sdvt: 'Simple DVT',
+                        both: 'Both',
+                      }}
+                      rules={{ required: true }}
+                    />
+                  </Stack>
+                )}
+
+                {otherModules === 'on' && (
+                  <Stack direction="column">
+                    <FormTitle>
+                      What is the name of your organization in the other Lido
+                      modules?
+                    </FormTitle>
+                    <TextInputHookForm
+                      fieldName="nameInModules"
+                      label="Name of your organisation"
+                      rules={{ required: true }}
+                    />
+                  </Stack>
+                )}
+
+                <Stack direction="column">
+                  <FormTitle>
+                    How many other Mainnet validators do you run outside of Lido
+                    CSM?
+                  </FormTitle>
+                  <NumberInputHookForm
+                    fieldName="otherValidatorsCount"
+                    label="Keys number"
+                    rules={{
+                      min: { value: 0, message: 'Minimum keys amount is 0' },
+                      max: {
+                        value: 999999999,
+                        message: 'Maximum keys amount is 999 999 999',
+                      },
+                    }}
+                  />
+                </Stack>
+
+                <SubmitButtonHookForm>Submit</SubmitButtonHookForm>
+              </Stack>
+            </form>
+          </Stack>
+        </WhenLoaded>
+      </FormProvider>
+    </SectionBlock>
+  );
+};

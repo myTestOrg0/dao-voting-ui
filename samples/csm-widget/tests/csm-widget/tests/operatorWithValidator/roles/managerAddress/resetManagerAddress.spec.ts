@@ -1,0 +1,66 @@
+import { test } from '../../../test.fixture';
+import { EPIC, suite } from 'tests/csm-widget/consts/qase.const';
+import { qase } from 'playwright-qase-reporter/playwright';
+import { expect } from '@playwright/test';
+import { generateAddress } from 'tests/shared/helpers/accountData';
+import { RPC_WAIT_TIMEOUT } from 'tests/shared/consts/timeouts';
+import { PRESETS } from 'tests/csm-widget/config/walletSetup';
+
+test.use({ secretPhrase: PRESETS.FULL_OPERATOR.secretPhrase });
+
+test.describe(
+  ...suite({
+    epic: EPIC.roles,
+    feature: 'Manager address',
+    story: 'Reset',
+  }),
+  () => {
+    let snapshotId: string;
+    let proposedAddress: `0x${string}`;
+
+    test.beforeEach(async ({ widgetService, csmSDK, forkActionService }) => {
+      snapshotId = await csmSDK.evmSnapshot();
+      await widgetService.settingsPage.managerAddressPage.open();
+      const nodeOperatorId = await widgetService.extractNodeOperatorId();
+
+      proposedAddress = generateAddress();
+      await forkActionService.proposeManager(nodeOperatorId, proposedAddress);
+      await forkActionService.confirmManager(nodeOperatorId);
+    });
+
+    test.afterAll(async ({ csmSDK }) => {
+      if (snapshotId) await csmSDK.evmRevert(snapshotId);
+    });
+
+    test(
+      qase(511, 'Should reset manager address when proposed'),
+      async ({ widgetService }) => {
+        test.fail(true, 'issue - CS-1205');
+        await widgetService.settingsPage.managerAddressPage.open();
+        await expect(
+          widgetService.settingsPage.managerAddressPage.resetButton,
+        ).toBeEnabled();
+        await widgetService.settingsPage.managerAddressPage.resetButton.click();
+
+        await test.step('Waiting for modal with confirmation tx', async () => {
+          await expect(
+            widgetService.page.getByText('You are changing Manager Address'),
+          ).toBeVisible({ timeout: RPC_WAIT_TIMEOUT });
+        });
+
+        await widgetService.walletPage.confirmTx();
+
+        await test.step('Waiting for success message', async () => {
+          await expect(
+            widgetService.page.getByText('Manager Address has been changed'),
+          ).toBeVisible({ timeout: RPC_WAIT_TIMEOUT });
+        });
+
+        await widgetService.settingsPage.txModal.closeModal();
+        await expect(
+          widgetService.settingsPage.managerAddressPage.addressInput,
+        ).toHaveValue('');
+      },
+    );
+  },
+);

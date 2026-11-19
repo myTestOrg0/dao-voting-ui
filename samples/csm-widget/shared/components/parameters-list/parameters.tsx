@@ -1,0 +1,169 @@
+import {
+  CurveParameters,
+  MODULE_NAME,
+  TOKENS,
+} from '@lidofinance/lido-csm-sdk';
+import { MODULE_METADATA, isCsmFamilyModule } from 'consts';
+import { useModule } from 'modules/web3';
+import { ReactNode } from 'react';
+import { FormatToken } from 'shared/formatters';
+import { plural } from 'utils';
+import {
+  formatEthKeyIntervals,
+  formatEthKeyIntervalRows,
+  formatKeysLimit,
+  formatPercentKeyIntervals,
+  formatPercentKeyIntervalRows,
+  formatQueues,
+  formatSecondsDuration,
+  ParameterRow,
+} from './format';
+
+type Parameter = {
+  title: string;
+  help: string;
+  render: (parameters?: CurveParameters) => ReactNode[];
+  renderRows?: (parameters?: CurveParameters) => ParameterRow[];
+  csmOnly?: boolean;
+};
+
+const buildAllParameters = (shortName: string): Parameter[] => [
+  {
+    title: 'Node Operator reward',
+    help: 'A share of the Consensus and Execution layers rewards',
+    render: (parameters) =>
+      formatPercentKeyIntervals(parameters?.rewardsConfig),
+    renderRows: (parameters) =>
+      formatPercentKeyIntervalRows(parameters?.rewardsConfig),
+  },
+  {
+    title: 'Bond',
+    help: `A security collateral that Node Operators must submit before uploading validator keys into ${shortName}`,
+    render: (parameters) => formatEthKeyIntervals(parameters?.bondConfig),
+    renderRows: (parameters) =>
+      formatEthKeyIntervalRows(parameters?.bondConfig),
+  },
+  {
+    title: 'Priority queue',
+    help: 'A queue that stays ahead of the general queue',
+    render: (parameters) => formatQueues(parameters?.queueConfig),
+    csmOnly: true,
+  },
+  {
+    title: 'Removal fee',
+    help: "An amount deducted from the Node Operator's bond per each deleted key to cover the maximal possible operational costs associated with the queue processing",
+    render: (parameters) => [
+      <>
+        <FormatToken amount={parameters?.keyRemovalFee} token={TOKENS.eth} />{' '}
+        for all keys
+      </>,
+    ],
+  },
+  {
+    title: 'Performance leeway',
+    help: 'A value that is deducted from the network average performance to determine the threshold for the key',
+    render: (parameters) =>
+      formatPercentKeyIntervals(parameters?.performanceLeewayConfig),
+    csmOnly: true,
+  },
+  {
+    title: 'Penalty fee',
+    help: 'An additional amount that is levied for violations committed by a Node Operator',
+    render: (parameters) => [
+      <>
+        <FormatToken
+          amount={parameters?.elStealingPenalty}
+          token={TOKENS.eth}
+        />
+      </>,
+    ],
+  },
+  {
+    title: 'Strikes parameters',
+    help: 'A number of strikes requires for a key to be exited and a time period of strike validity ',
+    render: (parameters) => [
+      <>
+        {plural({
+          value: Number(parameters?.strikesConfig?.threshold ?? 0n),
+          variants: ['strike', 'strikes'],
+          showValue: true,
+        })}{' '}
+        till key exit
+      </>,
+      <>
+        strike lifetime:{' '}
+        {plural({
+          value: parameters?.strikesConfig?.lifetime ?? 0, // FIXME: frames to days
+          variants: ['frame', 'frames'],
+          showValue: true,
+        })}
+      </>,
+    ],
+    csmOnly: true,
+  },
+  {
+    title: 'Bad performance penalty',
+    help: 'A penalty for the validator that was ejected due to strikes accumulated for bad performance',
+    render: (parameters) => [
+      <>
+        <FormatToken
+          amount={parameters?.badPerformancePenalty}
+          token={TOKENS.eth}
+        />
+      </>,
+    ],
+    csmOnly: true,
+  },
+  {
+    title: 'Keys limit',
+    help: 'A maximum number of non-withdrawn keys a Node Operator can upload',
+    render: (parameters) => formatKeysLimit(parameters?.keysLimit),
+  },
+  {
+    title: 'Performance coefficients',
+    help: 'Parameter weights accounted for in the calculation of the aggregated performance metric',
+    render: (parameters) => [
+      <>
+        {parameters?.performanceCoefficients?.attestationsWeight?.toString()}{' '}
+        for attestations
+      </>,
+      <>
+        {parameters?.performanceCoefficients?.blocksWeight?.toString()} for
+        block proposals
+      </>,
+      <>
+        {parameters?.performanceCoefficients?.syncWeight?.toString()} for sync
+        committee
+      </>,
+    ],
+  },
+  {
+    title: 'Allowed exit delay',
+    help: 'A timeframe for a key to be exited voluntary before it gets ejected from the protocol using triggerable withdrawals',
+    render: (parameters) => [
+      <>{formatSecondsDuration(parameters?.allowedExitDelay)}</>,
+    ],
+  },
+  {
+    title: 'Exit delay penalty',
+    help: 'A fine charged in case of the key exit delay',
+    render: (parameters) => [
+      <>
+        <FormatToken amount={parameters?.exitDelayPenalty} token={TOKENS.eth} />
+      </>,
+    ],
+  },
+];
+
+const PARAMETERS_BY_MODULE = Object.fromEntries(
+  Object.values(MODULE_NAME).map((module) => {
+    const all = buildAllParameters(MODULE_METADATA[module].shortName);
+    return [
+      module,
+      isCsmFamilyModule(module) ? all : all.filter((p) => !p.csmOnly),
+    ];
+  }),
+) as Record<MODULE_NAME, Parameter[]>;
+
+export const useParameters = (): Parameter[] =>
+  PARAMETERS_BY_MODULE[useModule().module];

@@ -1,0 +1,180 @@
+import { ReporterDescription } from '@playwright/test';
+import { widgetFullConfig } from '../../csm-widget/config';
+
+export const SENSITIVE_ENV_KEYS = [
+  'RPC_URL_TOKEN',
+  'WALLET_SECRET_PHRASE',
+  'WALLET_PASSWORD',
+  'QASE_API_TOKEN',
+  'SLACK_WEBHOOK_URL',
+  'WC_PROJECT_ID',
+  'REFUSE_CF_BLOCK_VALUE',
+  'PUSHGATEWAY_URL',
+  'PUSHGATEWAY_USERNAME',
+  'PUSHGATEWAY_PASSWORD',
+  'GRAFANA_URL',
+  'GRAFANA_API_KEY',
+  'PREVIEW_STAND_PASSWORD',
+  'BOCHQA_URL',
+  'BOCHQA_USER',
+  'BOCHQA_PASSWORD',
+];
+
+// ids from the bochqa.apps dictionary
+const BOCHQA_APP_IDS = { CSM: 1, CM: 2 } as const;
+
+type GetReportConfig = (
+  app: keyof typeof BOCHQA_APP_IDS,
+) => ReporterDescription[];
+
+export const getReportConfig: GetReportConfig = function (app) {
+  const reporterConfig: ReporterDescription[] = [
+    reporters.htmlReporter,
+    reporters.consoleReporter,
+  ];
+  if (process.env.CI) {
+    reporterConfig.push(
+      reporters.githubReporter,
+      reporters.qaseReporter,
+      reporters.chatReporter,
+      [
+        '@lidofinance/bochqa-reporter',
+        {
+          appId: BOCHQA_APP_IDS[app],
+          launchName: getTestRunName(),
+          slackWebhookUrl: process.env.QA_METRICS_SLACK_WEBHOOK_URL,
+          slackMentions: [process.env.SLACK_DUTY_TAG],
+        },
+      ],
+    );
+
+    if (process.env.GH_EVENT_NAME !== 'workflow_dispatch') {
+      reporterConfig.push(reporters.pgReporter);
+    }
+  }
+  return [
+    [
+      '@lidofinance/secret-guard-reporter',
+      {
+        reporters: reporterConfig,
+        sensitiveEnvKeys: SENSITIVE_ENV_KEYS,
+      },
+    ],
+    ['../shared/config/skipper.reporter.ts'],
+    // must stay outside secret-guard: it swallows errors thrown before onBegin
+    ['../shared/config/globalError.reporter.ts'],
+    [
+      '@lidofinance/github-summary-reporter',
+      { qaseProjectName: process.env.QASE_PROJECT_ID },
+    ],
+  ];
+};
+
+export const getTestRunName = () => {
+  return (
+    `${
+      process.env.GH_EVENT_NAME === 'schedule' ? 'Schedule Run' : 'Auto Run'
+    } ` +
+    `[s:@${process.env.TEST_SUITE || 'ALL'}] ` +
+    `[t:${process.env.TEST_TAGS || '-'}] ` +
+    `[b:${getBranchName()}]` +
+    `[w:${process.env.WALLET_NAME || 'walletconnect'}]`
+  );
+};
+
+export const getBranchName = () => {
+  const branchName =
+    process.env.GITHUB_HEAD_REF ||
+    process.env.TEST_BRANCH ||
+    process.env.GH_BRANCH_REF_NAME ||
+    'none';
+
+  return branchName.replace('/', '-');
+};
+
+export const getTestRunDescription = () => {
+  return (
+    `Github run link: ${process.env.GH_ACTION_URL}\n` +
+    `Stand url: ${widgetFullConfig.standConfig.standUrl}`
+  );
+};
+
+const reporters: {
+  htmlReporter: ReporterDescription;
+  consoleReporter: ReporterDescription;
+  githubReporter: ReporterDescription;
+  chatReporter: ReporterDescription;
+  pgReporter: ReporterDescription;
+  qaseReporter: ReporterDescription;
+} = {
+  htmlReporter: ['html', { open: 'never' }],
+  consoleReporter: ['list'],
+  githubReporter: ['github'],
+  pgReporter: [
+    '@lidofinance/pg-reporter',
+    {
+      appName: 'csm-widget',
+      env: process.env.STAND_TYPE,
+      runName: getTestRunName(),
+      pushgatewayOptions: {
+        username: process.env.PUSHGATEWAY_USERNAME,
+        password: process.env.PUSHGATEWAY_PASSWORD,
+        url: process.env.PUSHGATEWAY_URL,
+        cookie: `${process.env.REFUSE_CF_BLOCK_NAME}=${process.env.REFUSE_CF_BLOCK_VALUE}`,
+      },
+      grafanaOptions: {
+        url: process.env.GRAFANA_URL,
+        apiKey: process.env.GRAFANA_API_KEY,
+      },
+      network: 'L1',
+      testTags: process.env.TEST_TAGS,
+    },
+  ],
+  chatReporter: [
+    '@lidofinance/chat-reporter',
+    {
+      enabled: process.env.REPORT_ENABLED,
+      customDescription: `- Stand type: \`${process.env.STAND_TYPE}\`\n`,
+      customTitle: process.env.JOB_CUSTOM_NAME,
+      ciRunUrl: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+
+      // ───── Slack settings ─────
+      slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
+      slackDutyTag: process.env.SLACK_DUTY_TAG,
+      qaseProjectId: process.env.QASE_PROJECT_ID,
+    },
+  ],
+  qaseReporter: [
+    'playwright-qase-reporter',
+    {
+      debug: false,
+      environment: process.env.STAND_TYPE,
+      mode: 'testops', // value 'testops' enables Qase reporter, 'off' disables
+      testops: {
+        api: {
+          token: process.env.QASE_API_TOKEN,
+        },
+        project: process.env.QASE_PROJECT_ID,
+        uploadAttachments: true,
+        run: {
+          complete: true,
+          title: getTestRunName(),
+          description: getTestRunDescription(),
+          tags: [
+            `ci_event:${process.env.GH_EVENT_NAME || 'none'}`,
+            `suite:${process.env.TEST_SUITE || 'ALL'}`,
+            `tags:${process.env.TEST_TAGS || '-'}`,
+            `branch:${getBranchName()}`,
+            `wallet:${process.env.WALLET_NAME || 'walletconnect'}`,
+          ],
+        },
+        plan: {
+          id: process.env.QASE_PLAN_ID,
+        },
+        batch: {
+          size: 10,
+        },
+      },
+    },
+  ],
+};

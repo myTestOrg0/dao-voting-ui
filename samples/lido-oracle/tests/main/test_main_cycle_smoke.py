@@ -1,0 +1,79 @@
+import logging
+import logging.handlers
+import multiprocessing
+import os
+from concurrent.futures import ProcessPoolExecutor
+from typing import cast
+
+import pytest
+
+from src import variables
+from src.main import main
+from src.modules.common.daemon_module import DaemonModule
+from src.modules.oracles.common.consensus import ConsensusModule
+from src.types import OracleModuleName
+
+
+@pytest.mark.mainnet
+@pytest.mark.integration
+class TestIntegrationMainCycleSmoke:
+    def run_main_with_logging(self, module_name, log_queue):
+        queue_handler = logging.handlers.QueueHandler(log_queue)
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(queue_handler)
+
+        variables.DAEMON = False
+        variables.CYCLE_SLEEP_IN_SECONDS = 0
+
+        # Use last finalized instead of head slot for avoiding calls with non-existent block at the moment of cycle
+        ConsensusModule._get_latest_blockstamp = lambda self: cast(DaemonModule, self)._receive_last_finalized_slot()
+
+        if module_name in (OracleModuleName.CSM, OracleModuleName.CM):
+            variables.PERFORMANCE_COLLECTOR_URI = ["http://localhost:9020"]
+
+            if module_name is OracleModuleName.CM:
+                # The conftest sets the CSM address for every mainnet test, but CM has its own module contract
+                variables.STAKING_MODULE_ADDRESS = os.getenv('CURATED_MODULE_ADDRESS')
+
+            from src.web3py.extensions.staking_module import StakingModuleContracts
+
+            StakingModuleContracts.CONTRACT_LOAD_MAX_RETRIES = 3
+            StakingModuleContracts.CONTRACT_LOAD_RETRY_DELAY = 0
+
+            from src.modules.oracles.staking_modules.base import SMPerformanceOracle
+            from src.modules.oracles.staking_modules.common.state import State
+
+            SMPerformanceOracle._prepare_duties_state = lambda self, blockstamp: State(
+                blockstamp.ref_epoch, blockstamp.ref_epoch, 1
+            )
+
+            from src.providers.performance.client import PerformanceClient
+
+            # Report the whole requested range as stored, so the oracle sees the data as available
+            PerformanceClient.get_stored_epochs_count = lambda self, from_epoch, to_epoch: to_epoch - from_epoch + 1
+            PerformanceClient.get_epochs_demand = lambda *args, **kwargs: None
+            PerformanceClient.post_epochs_demand = lambda *args, **kwargs: None
+            PerformanceClient.delete_epochs_demand = lambda *args, **kwargs: None
+
+        main(module_name)
+
+    @pytest.mark.parametrize(
+        "module_name",
+        [OracleModuleName.ACCOUNTING, OracleModuleName.EJECTOR, OracleModuleName.CSM, OracleModuleName.CM],
+    )
+    def test_main_cycle_smoke__oracle_module__cycle_runs_successfully(self, caplog, module_name: OracleModuleName):
+        ctx = multiprocessing.get_context('fork')
+        manager = ctx.Manager()
+        log_queue = manager.Queue()
+        listener = logging.handlers.QueueListener(log_queue, caplog.handler)
+        listener.start()
+
+        with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
+            future = executor.submit(self.run_main_with_logging, module_name, log_queue)
+            future.result()
+
+        listener.stop()
+
+        error_logs = [record for record in caplog.records if record.levelno >= logging.ERROR]
+        assert not error_logs, f"Found error logs: {[record.message for record in error_logs]}"

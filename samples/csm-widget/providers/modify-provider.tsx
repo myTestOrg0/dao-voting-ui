@@ -1,0 +1,106 @@
+import { useFeatureFlags } from 'config/feature-flags';
+import {
+  FeatureFlagsType,
+  ICS_APPLY_FORM,
+  SURVEYS_SETUP_ENABLED,
+  DISABLE_DEPOSIT_DATA_VALIDATION,
+  DISABLE_ICS_PROOF_VALIDATION,
+  DISABLE_DEPOSIT_DATA_SIGNATURE_VALIDATION,
+} from 'config/feature-flags/types';
+import { MATOMO_CLICK_EVENTS_TYPES } from 'consts/matomo-click-events';
+import { REF_MAPPING } from 'consts/ref-mapping';
+import {
+  createContext,
+  FC,
+  PropsWithChildren,
+  useContext,
+  useEffect,
+  useMemo,
+} from 'react';
+import { useSearchParams, useSessionStorage } from 'shared/hooks';
+import invariant from 'tiny-invariant';
+import { compareLowercase, isTruthy, trackMatomoEvent } from 'utils';
+import { Address, isAddress } from 'viem';
+
+type ModifyContextValue = {
+  referrer?: Address;
+};
+
+const QUERY_REFERRER = 'ref';
+
+// TODO: remove functionality to enable feature-flags via query params
+const FEATURE_FLAG_QUERY_MAPPING: Record<string, keyof FeatureFlagsType> = {
+  'ics-apply': ICS_APPLY_FORM,
+  'survey-setup': SURVEYS_SETUP_ENABLED,
+  'disable-deposit-validation': DISABLE_DEPOSIT_DATA_VALIDATION,
+  'disable-ics-proof-validation': DISABLE_ICS_PROOF_VALIDATION,
+  'disable-deposit-signature-validation':
+    DISABLE_DEPOSIT_DATA_SIGNATURE_VALIDATION,
+};
+
+const ModifyContext = createContext<ModifyContextValue | null>(null);
+ModifyContext.displayName = 'ModifyContext';
+
+export const useModifyContext = () => {
+  const value = useContext(ModifyContext);
+  invariant(
+    value !== null,
+    'useModifyContext was used outside of ModifyContext',
+  );
+  return value;
+};
+
+export const ModifyProvider: FC<PropsWithChildren> = ({ children }) => {
+  const [referrer, setReferrer] = useSessionStorage<Address | undefined>(
+    'referrer',
+    undefined,
+  );
+  const featureFlags = useFeatureFlags();
+
+  const query = useSearchParams();
+
+  useEffect(() => {
+    if (!query) return;
+
+    const refParam = query?.get(QUERY_REFERRER) ?? undefined;
+
+    const ref =
+      REF_MAPPING.find(({ ref }) => compareLowercase(ref, refParam))?.address ||
+      refParam;
+
+    if (ref && ref !== referrer && isAddress(ref)) {
+      setReferrer(ref);
+
+      trackMatomoEvent(MATOMO_CLICK_EVENTS_TYPES.visitWithReferrer);
+    }
+  }, [query, referrer, setReferrer]);
+
+  useEffect(() => {
+    if (!query || !featureFlags) return;
+
+    Object.entries(FEATURE_FLAG_QUERY_MAPPING).forEach(
+      ([queryParam, flagName]) => {
+        const queryValue = query.get(queryParam);
+
+        if (queryValue !== null) {
+          const shouldEnable = isTruthy(queryValue);
+          const currentValue = featureFlags[flagName];
+
+          if (shouldEnable !== currentValue) {
+            featureFlags.setFeatureFlag(flagName, shouldEnable);
+          }
+        }
+      },
+    );
+  }, [query, featureFlags]);
+
+  const value: ModifyContextValue = useMemo(
+    () => ({
+      referrer,
+    }),
+    [referrer],
+  );
+  return (
+    <ModifyContext.Provider value={value}>{children}</ModifyContext.Provider>
+  );
+};

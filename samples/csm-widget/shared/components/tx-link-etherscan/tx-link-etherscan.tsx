@@ -1,0 +1,29 @@
+import { MATOMO_CLICK_EVENTS_TYPES } from 'consts/matomo-click-events';
+import { useDappStatus } from 'modules/web3';
+import { FC, ReactNode } from 'react';
+import { MatomoLink } from '../matomo-link/matomo-link';
+import { getEtherscanTxLink } from 'utils';
+
+type TxLinkEtherscanProps = {
+  text?: ReactNode;
+  txHash?: string | null;
+};
+
+export const TxLinkEtherscan: FC<TxLinkEtherscanProps> = ({
+  txHash,
+  text = 'View on Etherscan',
+}) => {
+  const { chainId } = useDappStatus();
+
+  if (!txHash) return null;
+
+  return (
+    <MatomoLink
+      href={getEtherscanTxLink(chainId, txHash)}
+      matomoEvent={MATOMO_CLICK_EVENTS_TYPES.etherscanTxLink}
+      title="View on etherscan"
+    >
+      {text}
+    </MatomoLink>
+  );
+};

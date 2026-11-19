@@ -1,0 +1,74 @@
+import { ethers } from "hardhat";
+
+import { log } from "lib";
+import { persistNetworkState, readNetworkState, resetStateFileFromDeployParams, Sk } from "lib/state-file";
+
+function getEnvVariable(name: string, defaultValue?: string): string {
+  const value = process.env[name] ?? defaultValue;
+  if (value === undefined) {
+    throw new Error(`Environment variable ${name} is required`);
+  }
+  log(`${name} = ${value}`);
+  return value;
+}
+
+export async function main() {
+  // Retrieve environment variables
+  const deployer = ethers.getAddress(getEnvVariable("DEPLOYER"));
+  const genesisTime = parseInt(getEnvVariable("GENESIS_TIME"));
+  const slotsPerEpoch = parseInt(getEnvVariable("SLOTS_PER_EPOCH", "32"));
+  const depositContractAddress = getEnvVariable("DEPOSIT_CONTRACT", "");
+  const withdrawalQueueBaseUri = getEnvVariable("WITHDRAWAL_QUEUE_BASE_URI", "");
+  const dsmPredefinedAddress = getEnvVariable("DSM_PREDEFINED_ADDRESS", "");
+  const genesisForkVersion = getEnvVariable("GENESIS_FORK_VERSION", "0x00000000");
+  const consolidationMigratorSourceModuleId = getEnvVariable("CONSOLIDATION_MIGRATOR_SOURCE_MODULE_ID", "");
+  const consolidationMigratorTargetModuleId = getEnvVariable("CONSOLIDATION_MIGRATOR_TARGET_MODULE_ID", "");
+
+  await resetStateFileFromDeployParams();
+  const state = readNetworkState();
+
+  // Update network-related information
+  state.networkId = parseInt(await ethers.provider.send("net_version"));
+  state.chainId = parseInt((await ethers.provider.getNetwork()).chainId.toString());
+  state.deployer = deployer;
+
+  // Update state with new values from environment variables
+  state.chainSpec = {
+    ...state.chainSpec,
+    genesisTime,
+    genesisForkVersion,
+    slotsPerEpoch,
+  };
+
+  if (depositContractAddress) {
+    state.chainSpec.depositContract = ethers.getAddress(depositContractAddress);
+  }
+
+  if (withdrawalQueueBaseUri) {
+    state.withdrawalQueueERC721.deployParameters = {
+      ...state.withdrawalQueueERC721.deployParameters,
+      baseUri: withdrawalQueueBaseUri,
+    };
+  }
+
+  if (dsmPredefinedAddress) {
+    state.depositSecurityModule.address = dsmPredefinedAddress;
+    state.depositSecurityModule.deployParameters = {
+      ...state.depositSecurityModule.deployParameters,
+      usePredefinedAddressInstead: ethers.getAddress(dsmPredefinedAddress),
+    };
+  }
+
+  state.consolidationMigrator.deployParameters = {
+    ...state.consolidationMigrator.deployParameters,
+    ...(consolidationMigratorSourceModuleId && { sourceModuleId: parseInt(consolidationMigratorSourceModuleId) }),
+    ...(consolidationMigratorTargetModuleId && { targetModuleId: parseInt(consolidationMigratorTargetModuleId) }),
+  };
+
+  // Initialize gas usage tracking
+  state[Sk.scratchDeployGasUsed] = 0n.toString();
+
+  persistNetworkState(state);
+
+  log.emptyLine(); // Add an empty line for better readability
+}

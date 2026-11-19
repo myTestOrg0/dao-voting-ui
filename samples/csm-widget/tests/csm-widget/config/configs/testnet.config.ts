@@ -1,0 +1,55 @@
+import { forkPort } from 'tests/shared/config/forkPorts';
+import { BaseConfig } from './base.config';
+
+export class TestnetConfig extends BaseConfig {
+  constructor() {
+    super();
+
+    this.standConfig = {
+      standType: 'testnet',
+      standUrl: 'https://csm.testnet.fi/',
+      matomoUrl: 'https://matomo.testnet.fi/matomo.php',
+      feedbackFormUrl: 'https://forms.gle/ZBUqbykaZokJLf4M7',
+      networkConfig: {
+        chainId: 560048,
+        tokenSymbol: 'ETH',
+        chainName: 'Hoodi',
+        rpcUrl: this.getRpcUrl('testnet'),
+        scan: 'https://hoodi.etherscan.io/',
+      },
+      nodeConfig: {
+        mockConfig: {
+          mockEnabled: true,
+          rpcUrlToMock: [`.*/api/rpc\\?chainId=560048`],
+        },
+        rpcUrl: this.getRpcUrl('testnet'),
+        derivationPath: "m/44'/60'/0'/0",
+        host: '127.0.0.1',
+        port: forkPort('hoodi'),
+      },
+      mockConfig: {
+        urls: {
+          csmSurveysApi: 'https://csm-survey-api.testnet.fi',
+        },
+      },
+      monitoringConfig: {
+        urls: {
+          beaconchain: 'https://hoodi.beaconcha.in',
+          operators: 'https://operators-hoodi.testnet.fi',
+          feesMonitoring: 'https://fees-monitoring-hoodi.testnet.fi',
+          csmSentinel: 'https://github.com/lidofinance/sm-sentinel',
+        },
+        stakingModuleIndex: 4,
+      },
+      keysGeneratorConfig: {
+        chain: 'hoodi',
+        withdrawalCredentials: '0x4473dCDDbf77679A643BdB654dbd86D67F8d32f2',
+      },
+      ipfsConfig: {
+        gateway:
+          (process.env.IPFS_GATEWAY as `${string}/ipfs/`) ||
+          'http://127.0.0.1:8080/ipfs/',
+      },
+    };
+  }
+}

@@ -1,0 +1,103 @@
+import { expect } from "chai";
+import { ZeroAddress } from "ethers";
+import { ethers } from "hardhat";
+
+import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+
+import { ether, impersonate, log } from "lib";
+import {
+  ensureFirstPostMigrationReport,
+  getProtocolContext,
+  normalizeWithdrawalVaultBaseline,
+  ProtocolContext,
+  reportWithoutClActivation,
+} from "lib/protocol";
+
+import { bailOnFailure, Snapshot } from "test/suite";
+
+describe("Scenario: Burn Shares", () => {
+  let ctx: ProtocolContext;
+  let snapshot: string;
+
+  let stranger: HardhatEthersSigner;
+
+  const amount = ether("1");
+  let sharesToBurn: bigint;
+  let internalEth: bigint;
+  let internalShares: bigint;
+
+  before(async () => {
+    ctx = await getProtocolContext();
+
+    [stranger] = await ethers.getSigners();
+
+    snapshot = await Snapshot.take();
+  });
+
+  beforeEach(bailOnFailure);
+
+  after(async () => await Snapshot.restore(snapshot));
+
+  it("Should allow stranger to submit ETH", async () => {
+    const { lido } = ctx.contracts;
+
+    await ensureFirstPostMigrationReport(ctx);
+    await normalizeWithdrawalVaultBaseline(ctx, 0n);
+
+    // The stranger is a well-known hardhat account that may already hold stETH on a live fork,
+    // so check the balance delta rather than the absolute value.
+    const stEthBefore = await lido.balanceOf(stranger.address);
+
+    await lido.connect(stranger).submit(ZeroAddress, { value: amount });
+
+    const stEthAfter = await lido.balanceOf(stranger.address);
+    expect(stEthAfter - stEthBefore).to.be.approximately(amount, 10n, "Incorrect stETH balance after submit");
+
+    sharesToBurn = await lido.sharesOf(stranger.address);
+    internalEth = (await lido.totalSupply()) - (await lido.getExternalEther());
+    internalShares = (await lido.getTotalShares()) - (await lido.getExternalShares());
+
+    log.debug("Shares state before", {
+      "Stranger shares": sharesToBurn,
+      "Total ETH": ethers.formatEther(internalEth),
+      "Total shares": internalShares,
+    });
+  });
+
+  it("Should not allow stranger to burn shares", async () => {
+    const { burner } = ctx.contracts;
+    const burnTx = burner.connect(stranger).commitSharesToBurn(sharesToBurn);
+
+    await expect(burnTx).to.be.revertedWithCustomError(burner, "AppAuthFailed");
+  });
+
+  it("Should burn shares after report", async () => {
+    const { lido, burner, accounting } = ctx.contracts;
+
+    await lido.connect(stranger).approve(burner.address, ether("1000000"));
+
+    const accountingSigner = await impersonate(accounting.address, ether("1"));
+    await burner.connect(accountingSigner).requestBurnSharesForCover(stranger, sharesToBurn);
+
+    await reportWithoutClActivation(ctx, {
+      sharesRequestedToBurn: sharesToBurn,
+      reportElVault: false,
+      reportWithdrawalsVault: false,
+      skipWithdrawals: true,
+    });
+
+    const sharesToBurnAfter = await lido.sharesOf(stranger.address);
+    const internalEthAfter = (await lido.totalSupply()) - (await lido.getExternalEther());
+    const internalSharesAfter = (await lido.getTotalShares()) - (await lido.getExternalShares());
+
+    log.debug("Shares state after", {
+      "Stranger shares": sharesToBurnAfter,
+      "Total ETH": ethers.formatEther(internalEthAfter),
+      "Total shares": internalSharesAfter,
+    });
+
+    expect(sharesToBurnAfter).to.equal(0n, "Incorrect shares balance after burn");
+    expect(internalEthAfter).to.equal(internalEth, "Incorrect total ETH supply after burn");
+    expect(internalSharesAfter).to.equal(internalShares - sharesToBurn, "Incorrect total shares after burn");
+  });
+});

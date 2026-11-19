@@ -1,0 +1,67 @@
+import { trackEvent } from '@lidofinance/analytics-matomo';
+import {
+  MATOMO_CLICK_EVENTS,
+  MATOMO_CLICK_EVENTS_TYPES,
+  createEvent,
+} from 'consts/matomo-click-events';
+import { snakeCase } from 'lodash';
+import { extractErrorMessage } from './extract-error-message';
+
+export type WithMatomoEvent<P = unknown> = P & {
+  matomoEvent?: MATOMO_CLICK_EVENTS_TYPES | undefined;
+};
+
+export const trackMatomoEvent = (eventType?: MATOMO_CLICK_EVENTS_TYPES) => {
+  eventType && trackEvent(...MATOMO_CLICK_EVENTS[eventType]);
+};
+
+export const trackMatomoFaqEvent = (faqId?: string) => {
+  faqId &&
+    trackEvent(...createEvent(`Open faq item «${faqId}»`, `faq_item_open`));
+};
+
+export const trackMatomoError = (description: string, tag: string) => {
+  trackEvent(...createEvent(`ERROR: ${description}`, `error_${tag}`));
+};
+
+export const trackMatomoRawError = (tag: string, error: unknown) => {
+  trackMatomoError(`${extractErrorMessage(error)}`, tag);
+};
+
+export const trackMatomoSurveySigninDenied = (
+  flow: 'create_idvtc' | 'claim_idvtc',
+) => {
+  trackEvent(
+    ...createEvent(
+      `Declined surveys sign-in during ${flow}`,
+      `surveys_signin_denied_${flow}`,
+    ),
+  );
+};
+
+export const trackMatomoFormEvent = (
+  formName?: string,
+  stage: 'start' | 'success' | 'retry' = 'start',
+) => {
+  formName &&
+    trackEvent(
+      ...createEvent(
+        `Submit form ${stage} for «${formName}»`,
+        `submit_form_${snakeCase(formName)}_${stage}`,
+      ),
+    );
+};
+
+export const trackMatomoSiweEvent = (stage: 'start' | 'success' = 'start') => {
+  trackEvent(...createEvent(`SIWE sign in ${stage}`, `siwe_signin_${stage}`));
+};
+
+export const trackMatomoPageEvent = (pageName?: string) => {
+  pageName &&
+    trackEvent(
+      ...createEvent(
+        `View page «${pageName}»`,
+        `view_${snakeCase(pageName)}_page`,
+      ),
+    );
+};

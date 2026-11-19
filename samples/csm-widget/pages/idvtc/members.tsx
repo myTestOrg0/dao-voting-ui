@@ -1,0 +1,24 @@
+import { PATH } from 'consts/urls';
+import { MembersPage } from 'features/idvtc/members';
+import { useOperatorType } from 'modules/web3/hooks/use-operator-type';
+import { useNodeOperator } from 'modules/web3/operator-provider/node-operator-provider';
+import { Gate, GateLoaded, Navigate } from 'shared/navigate';
+
+const Page = () => {
+  const { nodeOperator } = useNodeOperator();
+  const { isPending } = useOperatorType(nodeOperator);
+
+  return (
+    <GateLoaded>
+      <Gate rule="IS_NODE_OPERATOR" fallback={<Navigate path={PATH.CREATE} />}>
+        <GateLoaded additional={isPending}>
+          <Gate rule="IS_IDVTC" fallback={<Navigate path={PATH.HOME} />}>
+            <MembersPage />
+          </Gate>
+        </GateLoaded>
+      </Gate>
+    </GateLoaded>
+  );
+};
+
+export default Page;

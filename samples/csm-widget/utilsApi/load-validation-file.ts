@@ -1,0 +1,111 @@
+import Metrics from 'utilsApi/metrics';
+import { promises as fs } from 'fs';
+
+type AddressValidationFile = { addresses: string[] };
+
+const ERROR_BUCKET = {
+  STAT_FAILED: 'stat_failed',
+  READ_FAILED: 'read_failed',
+  INVALID_JSON: 'invalid_json',
+  INVALID_FORMAT: 'invalid_format',
+} as const;
+
+const EMPTY: ReadonlySet<string> = new Set();
+
+type CacheEntry = {
+  path: string;
+  mtimeMs: number;
+  denied: ReadonlySet<string>;
+};
+
+let cache: CacheEntry | null = null;
+
+const isValidValidationFile = (
+  data: unknown,
+): data is AddressValidationFile => {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'addresses' in data &&
+    Array.isArray((data as { addresses: unknown }).addresses) &&
+    (data as { addresses: unknown[] }).addresses.every(
+      (addr) => typeof addr === 'string',
+    )
+  );
+};
+
+const messageOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+const reportError = (bucket: string, details: string) => {
+  console.error(`[loadValidationFile] ${bucket}: ${details}`);
+  Metrics.request.validationFileLoadError.labels({ error: bucket }).inc(1);
+};
+
+const getFilePath = () => process.env.VALIDATION_FILE_PATH;
+
+const loadDeniedAddresses = async (): Promise<ReadonlySet<string>> => {
+  const filePath = getFilePath();
+
+  if (!filePath) {
+    return EMPTY;
+  }
+
+  let mtimeMs: number;
+  try {
+    const stats = await fs.stat(filePath);
+    mtimeMs = stats.mtimeMs;
+  } catch (error) {
+    reportError(ERROR_BUCKET.STAT_FAILED, `${filePath}: ${messageOf(error)}`);
+    return EMPTY;
+  }
+
+  if (cache && cache.path === filePath && cache.mtimeMs === mtimeMs) {
+    return cache.denied;
+  }
+
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    reportError(ERROR_BUCKET.READ_FAILED, `${filePath}: ${messageOf(error)}`);
+    return EMPTY;
+  }
+
+  if (raw.trim() === '') {
+    cache = { path: filePath, mtimeMs, denied: EMPTY };
+    return EMPTY;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    reportError(ERROR_BUCKET.INVALID_JSON, messageOf(error));
+    return EMPTY;
+  }
+
+  if (!isValidValidationFile(parsed)) {
+    reportError(
+      ERROR_BUCKET.INVALID_FORMAT,
+      'expected { addresses: string[] }',
+    );
+    return EMPTY;
+  }
+
+  console.info(
+    `[loadValidationFile] parsed with ${parsed.addresses.length} addresses`,
+  );
+
+  const denied: ReadonlySet<string> = new Set(
+    parsed.addresses.map((addr) => addr.trim().toLowerCase()),
+  );
+  cache = { path: filePath, mtimeMs, denied };
+  return denied;
+};
+
+export const isDenyListConfigured = (): boolean => !!getFilePath();
+
+/** Missing or broken file denies nothing (reported via metric). */
+export const isAddressDenied = async (address: string): Promise<boolean> =>
+  (await loadDeniedAddresses()).has(address.trim().toLowerCase());

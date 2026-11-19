@@ -1,0 +1,93 @@
+import { TOKENS } from '@lidofinance/lido-csm-sdk';
+import { CM_BOND_AMOUNTS_LINK } from 'consts/external-links';
+import { MATOMO_CLICK_EVENTS_TYPES } from 'consts/matomo-click-events';
+import { BOND_EXCESS, BOND_INSUFFICIENT } from 'consts/text';
+import { PATH } from 'consts/urls';
+import { useModule } from 'modules/web3';
+import {
+  FormTitle,
+  KeysAvailable,
+  MatomoLink,
+  Stack,
+  TitledAmount,
+  TokenAmount,
+} from 'shared/components';
+import { TokenButtonsHookForm } from 'shared/hook-form/controls';
+import { LocalLink } from 'shared/navigate';
+import { useAddKeysFormData } from '../context';
+
+export const TokenSelect: React.FC = () => {
+  const { isCsmFamily } = useModule();
+  const { ethBalance, stethBalance, wstethBalance, keysAvailable, bond } =
+    useAddKeysFormData(true);
+
+  return (
+    <>
+      <FormTitle
+        extra={
+          isCsmFamily ? (
+            <LocalLink
+              href={PATH.KEYS_SUBMIT}
+              anchor="#how-much-bond-is-needed"
+              matomoEvent={MATOMO_CLICK_EVENTS_TYPES.depositDataLearnMore}
+            >
+              How bond is calculated
+            </LocalLink>
+          ) : (
+            <MatomoLink
+              href={CM_BOND_AMOUNTS_LINK}
+              matomoEvent={MATOMO_CLICK_EVENTS_TYPES.depositDataLearnMore}
+            >
+              How bond is calculated
+            </MatomoLink>
+          )
+        }
+      >
+        Choose bond token
+      </FormTitle>
+      <TokenButtonsHookForm
+        options={{
+          [TOKENS.eth]: (
+            <Stack direction="column">
+              <TokenAmount token={TOKENS.eth} amount={ethBalance} />
+              <KeysAvailable
+                {...keysAvailable?.[TOKENS.eth]}
+                token={TOKENS.eth}
+              />
+            </Stack>
+          ),
+          [TOKENS.steth]: (
+            <Stack direction="column">
+              <TokenAmount token={TOKENS.steth} amount={stethBalance} />
+              <KeysAvailable
+                {...keysAvailable?.[TOKENS.steth]}
+                token={TOKENS.steth}
+              />
+            </Stack>
+          ),
+          [TOKENS.wsteth]: (
+            <Stack direction="column">
+              <TokenAmount token={TOKENS.wsteth} amount={wstethBalance} />
+              <KeysAvailable
+                {...keysAvailable?.[TOKENS.wsteth]}
+                token={TOKENS.wsteth}
+              />
+            </Stack>
+          ),
+        }}
+      />
+      {bond.delta && (
+        <TitledAmount
+          title={bond?.isInsufficient ? BOND_INSUFFICIENT : BOND_EXCESS}
+          description={
+            bond?.isInsufficient
+              ? 'Will be added to the transaction amount'
+              : 'Will be subtracted from the transaction amount'
+          }
+          amount={bond?.delta}
+          token={TOKENS.steth}
+        />
+      )}
+    </>
+  );
+};

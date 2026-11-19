@@ -1,0 +1,56 @@
+import { FC } from 'react';
+
+import { Checkbox, Text } from '@lidofinance/lido-ui';
+
+import {
+  DISABLE_DEPOSIT_DATA_SIGNATURE_VALIDATION,
+  DISABLE_DEPOSIT_DATA_VALIDATION,
+  DISABLE_ICS_PROOF_VALIDATION,
+  FeatureFlagsType,
+  getFeatureFlagsDefault,
+  ICS_APPLY_FORM,
+  SEED_DEPOSIT_BANNERS,
+  SURVEYS_SETUP_ENABLED,
+  useFeatureFlags,
+} from 'config/feature-flags';
+import { FormBlock, Stack } from 'shared/components';
+
+const FLAG_LABELS: Record<keyof FeatureFlagsType, string> = {
+  [ICS_APPLY_FORM]: 'Operator type applications (ICS, IDVTC)',
+  [SURVEYS_SETUP_ENABLED]: 'Surveys (setup & delegation)',
+  [SEED_DEPOSIT_BANNERS]: 'Seed deposit banners (CSM 0x02)',
+  [DISABLE_DEPOSIT_DATA_VALIDATION]: 'Disable deposit data validation',
+  [DISABLE_ICS_PROOF_VALIDATION]: 'Disable ICS proof validation',
+  [DISABLE_DEPOSIT_DATA_SIGNATURE_VALIDATION]:
+    'Disable deposit data signature validation',
+};
+
+const FLAGS = Object.keys(getFeatureFlagsDefault()) as Array<
+  keyof FeatureFlagsType
+>;
+
+export const QaFeatureFlags: FC = () => {
+  const featureFlags = useFeatureFlags();
+
+  if (!featureFlags) return null;
+
+  return (
+    <FormBlock>
+      <Text size="sm" strong>
+        Feature flags
+      </Text>
+      <Stack direction="column" gap="sm">
+        {FLAGS.map((flag) => (
+          <Checkbox
+            key={flag}
+            label={FLAG_LABELS[flag] ?? flag}
+            checked={featureFlags[flag]}
+            onChange={(e) =>
+              featureFlags.setFeatureFlag(flag, e.currentTarget.checked)
+            }
+          />
+        ))}
+      </Stack>
+    </FormBlock>
+  );
+};

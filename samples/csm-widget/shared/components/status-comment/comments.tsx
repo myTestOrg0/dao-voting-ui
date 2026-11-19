@@ -1,0 +1,143 @@
+import {
+  HOW_TO_EXIT_VALIDATOR_LINK,
+  PERFORMANCE_TIPS_LINK,
+} from 'consts/external-links';
+import { MATOMO_CLICK_EVENTS_TYPES } from 'consts/matomo-click-events';
+import { MODULE_METADATA } from 'consts/module';
+import { PATH } from 'consts/urls';
+import { FC } from 'react';
+import { LocalLink } from 'shared/navigate';
+import { MatomoLink } from '../matomo-link/matomo-link';
+import {
+  SHARE_LIMIT_STATUS,
+  useModule,
+  useShareLimitStatus,
+} from 'modules/web3';
+
+const VALIDATOR_ACTIVE_ANCHOR = '#when-does-a-validator-become-active';
+
+// TODO: check role
+export const CommentExitRequested: FC = () => (
+  <MatomoLink
+    matomoEvent={MATOMO_CLICK_EVENTS_TYPES.howToExitLinkComment}
+    href={HOW_TO_EXIT_VALIDATOR_LINK}
+  >
+    Exit the key from the CL
+  </MatomoLink>
+);
+
+export const CommentTriggeredEjection: FC = () => (
+  <>The key has been triggered to be ejected</>
+);
+
+export const CommentUnbonded: FC = () => (
+  <>
+    <LocalLink href={PATH.BOND_ADD}>Top up the bond</LocalLink> or{' '}
+    <MatomoLink
+      matomoEvent={MATOMO_CLICK_EVENTS_TYPES.howToExitLinkComment}
+      href={HOW_TO_EXIT_VALIDATOR_LINK}
+    >
+      Exit the key from the CL
+    </MatomoLink>
+  </>
+);
+
+export const CommentInvalid: FC = () => (
+  <LocalLink href={PATH.KEYS_REMOVE}>Remove the key</LocalLink>
+);
+
+export const CommentUnchecked: FC = () => (
+  <>
+    Resolve the issues with all keys in <b>Duplicated</b> and <b>Invalid</b>{' '}
+    statuses
+  </>
+);
+
+export const CommentUnbondedNonQueued: FC = () => (
+  <>
+    <LocalLink href={PATH.BOND_ADD}>Top up the bond</LocalLink> or{' '}
+    <LocalLink href={PATH.KEYS_REMOVE}>Remove the key</LocalLink>
+  </>
+);
+
+export const CommentNonQueued: FC = () => (
+  <>
+    If you have <b>Unbonded</b> keys — resolve the issues with them. <br />
+    If there are no <b>Unbonded</b> keys — put this key back to the queue (
+    <LocalLink href={PATH.KEYS_NORMALIZE}>Normalize queue</LocalLink>).
+  </>
+);
+
+export const CommentExiting: FC = () => (
+  <LocalLink
+    href={PATH.KEYS_VIEW}
+    anchor="#when-does-a-validator-become-withdrawn"
+    matomoEvent={
+      MATOMO_CLICK_EVENTS_TYPES.whenValidatorBecomeWithdrawnLinkComment
+    }
+  >
+    When does the validator become withdrawn?
+  </LocalLink>
+);
+
+export const CommentActivationPending: FC = () => {
+  return (
+    <LocalLink
+      href={PATH.KEYS_VIEW}
+      anchor={VALIDATOR_ACTIVE_ANCHOR}
+      matomoEvent={
+        MATOMO_CLICK_EVENTS_TYPES.whenValidatorBecomeActiveLinkComment
+      }
+    >
+      When does the validator become active?
+    </LocalLink>
+  );
+};
+
+export const CommentWithStrikes: FC = () => {
+  return (
+    <>
+      Check out{' '}
+      <MatomoLink
+        href={PERFORMANCE_TIPS_LINK}
+        matomoEvent={MATOMO_CLICK_EVENTS_TYPES.performanceTipsLink}
+      >
+        tips
+      </MatomoLink>{' '}
+      on how to improve your performance
+    </>
+  );
+};
+
+export const CommentDepositable: FC = () => {
+  const { isCsmFamily, module } = useModule();
+  const name = MODULE_METADATA[module].variantName;
+  const { data: status } = useShareLimitStatus();
+  const STAKE_SHARE_LIMIT_ANCHOR = isCsmFamily
+    ? '#what-is-the-csm-stake-share-limit'
+    : '#what-are-the-possible-key-statuses';
+
+  return status === SHARE_LIMIT_STATUS.REACHED ? (
+    <>
+      The key may not receive deposits in the near future because {name} has
+      reached its{' '}
+      <LocalLink
+        href={PATH.KEYS_VIEW}
+        anchor={STAKE_SHARE_LIMIT_ANCHOR}
+        matomoEvent={MATOMO_CLICK_EVENTS_TYPES.stakeShareLimitLinkComment}
+      >
+        stake share limit
+      </LocalLink>
+    </>
+  ) : (
+    <LocalLink
+      href={PATH.KEYS_VIEW}
+      anchor={VALIDATOR_ACTIVE_ANCHOR}
+      matomoEvent={
+        MATOMO_CLICK_EVENTS_TYPES.whenValidatorBecomeActiveLinkComment
+      }
+    >
+      When does the validator become active?
+    </LocalLink>
+  );
+};

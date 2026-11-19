@@ -1,0 +1,84 @@
+import { OPERATOR_TYPE } from '@lidofinance/lido-csm-sdk';
+
+export const PATH = {
+  HOME: '/',
+
+  CREATE: '/create',
+  CREATE_0x01: '/create/0x01',
+  CREATE_ICS: '/create/ics',
+  CREATE_IDVTC: '/create/idvtc',
+  CREATE_0x02: '/create/0x02',
+
+  KEYS: '/keys',
+  KEYS_SUBMIT: '/keys/submit',
+  KEYS_REMOVE: '/keys/remove',
+  KEYS_EJECT: '/keys/eject',
+  KEYS_EXIT: '/keys/exit',
+  KEYS_VIEW: '/keys/view',
+  KEYS_NORMALIZE: '/keys/normalize',
+
+  MONITORING: '/monitoring',
+
+  BOND: '/bond',
+  BOND_CLAIM: '/bond/claim',
+  BOND_ADD: '/bond/add',
+  BOND_REWARDS_HISTORY: '/bond/rewards-history',
+  BOND_REBASE_HISTORY: '/bond/rebase-history',
+  BOND_UNLOCK: '/bond/unlock',
+
+  SETTINGS: '/settings',
+  SETTINGS_ROLES: '/settings/roles',
+  SETTINGS_REWARDS_ADDRESS: '/settings/rewards-address',
+  SETTINGS_MANAGER_ADDRESS: '/settings/manager-address',
+  SETTINGS_CLAIMER: '/settings/claimer',
+  SETTINGS_SPLITS: '/settings/splits',
+  SETTINGS_INBOX: '/settings/inbox',
+  SETTINGS_METADATA: '/settings/metadata',
+  SETTINGS_GENERAL: '/settings/general',
+
+  DELAYED_PENALTY: '/delayed-penalty',
+  DELAYED_PENALTY_REPORT: '/delayed-penalty/report',
+  DELAYED_PENALTY_CANCEL: '/delayed-penalty/cancel',
+
+  TOP_UP_ALLOCATION: '/top-up-allocation',
+
+  TYPE: '/type',
+  TYPE_ICS_CLAIM: '/type/ics-claim',
+  TYPE_ICS_SYSTEM: '/type/ics-system',
+  TYPE_ICS_APPLY: '/type/ics-apply',
+  TYPE_ICS_PARAMETERS: '/type/ics-parameters',
+  TYPE_PARAMETERS: '/type/parameters',
+
+  TYPE_IDVTC_DESCRIPTION: '/type/idvtc-description',
+  TYPE_IDVTC_APPLY: '/type/idvtc-apply',
+  TYPE_IDVTC_PARAMETERS: '/type/idvtc-parameters',
+  TYPE_IDVTC_CLAIM: '/type/idvtc-claim',
+
+  IDVTC_DKG: '/idvtc/dkg',
+  IDVTC_MEMBERS: '/idvtc/members',
+
+  SURVEYS: '/surveys',
+  SURVEYS_CONTACTS: '/surveys/contacts',
+  SURVEYS_EXPERIENCE: '/surveys/experience',
+  SURVEYS_HOW_DID_YOU_LEARN_CSM: '/surveys/learn-csm',
+  SURVEYS_SETUP: '/surveys/setup',
+  SURVEYS_DELEGATES: '/surveys/delegates',
+  SURVEYS_DELEGATOR: '/surveys/delegator',
+
+  GROUP: '/group',
+
+  MY_OPERATORS: '/operators',
+
+  WRAPPED_SHARE: '/wrapped-2025/share',
+
+  QA_CONFIG: '/qa-config',
+} as const;
+
+export type PATH = (typeof PATH)[keyof typeof PATH];
+
+export const CREATE_PATH_BY_TYPE = {
+  [OPERATOR_TYPE.CSM_DEF]: PATH.CREATE_0x01,
+  [OPERATOR_TYPE.CSM_ICS]: PATH.CREATE_ICS,
+  [OPERATOR_TYPE.CSM_IDVTC]: PATH.CREATE_IDVTC,
+  [OPERATOR_TYPE.CSM2_DEF]: PATH.CREATE_0x02,
+} as const;

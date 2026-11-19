@@ -1,0 +1,19 @@
+import { PATH } from 'consts/urls';
+import { IdvtcParametersPage } from 'features/type-parameters';
+import { FC } from 'react';
+import { Gate, GateLoaded, Navigate } from 'shared/navigate';
+
+const Page: FC = () => (
+  <GateLoaded>
+    <Gate rule="IS_CSM_FAMILY" fallback={<Navigate path={PATH.HOME} />}>
+      <Gate
+        rule="ICS_APPLY_ENABLED"
+        fallback={<Navigate path={PATH.TYPE_PARAMETERS} />}
+      >
+        <IdvtcParametersPage />
+      </Gate>
+    </Gate>
+  </GateLoaded>
+);
+
+export default Page;

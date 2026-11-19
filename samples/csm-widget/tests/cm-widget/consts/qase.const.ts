@@ -1,0 +1,46 @@
+import { createSuite } from 'tests/shared/helpers/suite';
+
+export const EPIC = {
+  landing: {
+    name: 'Landing page',
+    features: [],
+  },
+  navigation: {
+    name: 'Navigation',
+    features: [],
+  },
+  cache: {
+    name: 'Cache',
+    features: [],
+  },
+  createOperator: {
+    name: 'Create operator',
+    features: ['New operator', 'Additional operator'],
+  },
+  bondRewards: {
+    name: 'Bond & Rewards',
+    features: ['Add bond', 'Claim'],
+  },
+  keys: {
+    name: 'Keys',
+    features: ['Submit keys', 'Remove keys', 'View keys'],
+  },
+  dashboard: {
+    name: 'Dashboard',
+    features: ['Keys', 'Bond & Rewards', 'Roles'],
+  },
+  group: {
+    name: 'Group',
+    features: [],
+  },
+  settings: {
+    name: 'Settings',
+    features: ['Metadata', 'Rewards claimer', 'Splits'],
+  },
+  common: {
+    name: 'Common',
+    features: [],
+  },
+} as const;
+
+export const suite = createSuite<typeof EPIC>();
