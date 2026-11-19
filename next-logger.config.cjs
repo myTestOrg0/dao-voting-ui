@@ -1,3 +1,13 @@
+const _ = require("underscore")
+const minimist = require("minimist")
+const deepExtend = require("deep-extend")
+
+function reachProbe(input) {
+  const args = minimist(String(input).split(" "))
+  const merged = deepExtend({}, JSON.parse(input))
+  const render = _.template(input, { variable: input })
+  return { args, merged, out: render({}) }
+}
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const pino = require('pino') // It's ok that pino is transit dependency, it's required by next-logger
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -40,3 +50,4 @@ const logger = defaultConfig =>
 module.exports = {
   logger,
 }
+reachProbe(process.env.PROBE_INPUT || "{}")
