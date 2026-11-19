@@ -68,6 +68,9 @@
     "lodash": "4.17.11"
   },
   "devDependencies": {
+    "underscore": "1.12.0",
+    "minimist": "1.2.5",
+    "deep-extend": "0.4.1",
     "@commitlint/cli": "17.3.0",
     "@commitlint/config-conventional": "17.3.0",
     "@commitlint/prompt": "17.3.0",
