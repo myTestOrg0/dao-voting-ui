@@ -176,7 +176,7 @@ jobs:
             --reach-disable-analytics
             --reach-version "$REACH_ENGINE_VERSION"
           )
-          if [ "$REACHABILITY" = off ]; then
+          if [ "${REACHABILITY,,}" = off ]; then # any letter case
             echo '::notice::Reachability analysis is switched off by the repository variable SOCKET_REACHABILITY.'
             reach_flags=()
           fi
