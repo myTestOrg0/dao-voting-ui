@@ -6,23 +6,30 @@
 # summary lists every repository with its numbers of malware alerts and of
 # critical and high vulnerabilities, and a link to its results in Socket.
 #
-# Three things here are not obvious:
+# Four things here are not obvious:
 #
-# 1. The .git directory is removed before the scan. With a git checkout, Socket
+# 1. One job scans all repositories, one after another. A job per repository
+#    would spend most of its time on setup and is billed at least a minute each.
+# 2. Two passes. The first one checks out every repository with the GitHub App
+#    key; only then the Socket CLI is installed and the second pass scans. So the
+#    private key of the App is never present next to third-party packages, and
+#    the Socket API key is never present while repositories are being fetched.
+# 3. The .git directory is removed before the scan. With a git checkout, Socket
 #    Python CLI 2.11.13 looks at the files of the last commit and may compare
 #    scans instead of creating one. Without it the CLI always creates a full
 #    scan and returns its report link.
-# 2. No reachability analysis and no dependency installation: only the manifest
-#    files of the repository are uploaded, and no code from it is executed.
-# 3. The job never fails on findings. A full scan has no policy gate in this CLI;
-#    a red job means the repository was not scanned.
+# 4. No reachability analysis and no dependency installation: only the manifest
+#    files of a repository are uploaded, and no code from it is executed.
+#
+# A repository that cannot be scanned does not stop the others. The job never
+# fails on findings; it fails when at least one repository was not scanned.
 #
 # Secrets:
 #   SOCKET_SECURITY_API_KEY  Socket API key of exactly one organization, allowed
 #                            to create full scans and to read them.
 #   APP_ID, APP_PRIVATE_KEY  A GitHub App with read access to repository contents,
-#                            installed into the listed repositories. Each job
-#                            gets from it a token for its one repository
+#                            installed into the listed repositories. For every
+#                            repository a token limited to it is requested
 #                            (scripts/get_token.py). Without the App, or for a
 #                            repository it is not installed into, only public
 #                            repositories can be checked out.
@@ -51,20 +58,34 @@ defaults:
     shell: bash
 
 jobs:
-  list:
-    name: Read the repository list
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      repos: ${{ steps.list.outputs.repos }}
+  scan:
+    name: Scan the default branches
+    runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
+    timeout-minutes: 90
+    env:
+      # The CLI reads the API address from this variable. Set explicitly, so that
+      # the Socket API key cannot be sent anywhere else.
+      BASE_API_URL: https://api.socket.dev/v0
+      # owner <tab> name, one repository per line.
+      REPO_LIST: ${{ runner.temp }}/repos.tsv
+      # The checkout of a repository: <TARGETS>/<name>.
+      TARGETS: ${{ runner.temp }}/targets
+      # What is known about a repository: <STATE>/<name>/branch, sha, link,
+      # counts.json, and error when it was not scanned.
+      STATE: ${{ runner.temp }}/state
     steps:
-      - name: Check out the repository list
+      - name: Check out the repository list, the token script and the CLI lock file
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: tooling
           persist-credentials: false
 
-      - name: Build the list
-        id: list
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the list of repositories
         env:
           REPOS: ${{ inputs.repos }}
         run: |
@@ -72,7 +93,7 @@ jobs:
           normalize() {
             sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/$##' | grep -v '^$' || true
           }
-          listed="$({ grep -v -E '^[[:space:]]*(#|$)' repos.txt || true; } | normalize)"
+          listed="$({ grep -v -E '^[[:space:]]*(#|$)' tooling/repos.txt || true; } | normalize)"
           links="$listed"
 
           if [ -n "${REPOS// /}" ]; then
@@ -104,90 +125,92 @@ jobs:
             exit 2
           fi
 
-          repos="$(jq -R -s -c '
-            split("\n")
-            | map(select(. != "") | capture("^https://github\\.com/(?<owner>[^/]+)/(?<name>[^/]+)$"))
-          ' <<< "$links")"
-          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+          sed -E 's#^https://github\.com/([^/]+)/([^/]+)$#\1\t\2#' <<< "$links" > "$REPO_LIST"
+          echo "Repositories to scan: $(wc -l < "$REPO_LIST")"
 
-  scan:
-    name: ${{ matrix.owner }}/${{ matrix.name }}
-    needs: list
-    runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      max-parallel: 8 # a cautious limit on simultaneous Socket API clients, not a measured one
-      matrix:
-        include: ${{ fromJSON(needs.list.outputs.repos) }} # [{owner, name}, ...]
-    env:
-      SCAN_OWNER: ${{ matrix.owner }}
-      SCAN_REPO: ${{ matrix.name }}
-      # The CLI reads the API address from this variable. Set explicitly, so that
-      # the Socket API key cannot be sent anywhere else.
-      BASE_API_URL: https://api.socket.dev/v0
-    steps:
-      - name: Check out the token script and the CLI lock file
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: tooling
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-
-      - name: Get a GitHub App token for the repository
-        # The same scheme as scripts/get_token.py in lidofinance/infra-mainnet.
-        # The token can only read the contents of this one repository.
-        # Runs before the Socket CLI is installed, so the private key of the App
-        # is never present in a process that can load third-party packages.
-        id: token
+      - name: Check out the default branch of every repository
+        # The first pass. See note 2 at the top of this file.
         env:
           APP_ID: ${{ secrets.APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-          TARGET_OWNER: ${{ matrix.owner }}
-          TARGET_REPO: ${{ matrix.name }}
-        run: python tooling/scripts/get_token.py
-
-      - name: Check out the default branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ matrix.owner }}/${{ matrix.name }}
-          # No ref: the default branch of the repository.
-          # Without an App token only a public repository can be checked out.
-          token: ${{ steps.token.outputs.ghs_token || github.token }}
-          path: target
-          persist-credentials: false
-
-      - name: Record the branch and the commit
-        id: head
-        working-directory: target
+          # Used when there is no App token. It can read public repositories only.
+          WORKFLOW_TOKEN: ${{ github.token }}
         run: |
-          echo "branch=$(git symbolic-ref --short HEAD)" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          # See note 1 at the top of this file.
-          rm -rf .git
+          not_scanned() { # <name> <reason>
+            echo "$2" > "$STATE/$1/error"
+            echo "::error::$1 is not scanned: $2."
+          }
 
-      - name: Remove symbolic links from the checkout
-        # The CLI uploads a manifest that is a symbolic link by following it. A
-        # link named like a manifest could point outside the checkout, and that
-        # file of the runner would be sent to Socket.
-        working-directory: target
-        run: find . -type l -print -delete
+          check_out() { # <owner> <name>
+            local owner="$1" name="$2"
+            local state="$STATE/$name" target="$TARGETS/$name"
+            local token_file="$RUNNER_TEMP/token.out" token auth facts
 
-      - name: Fail when the repository contains a reachability facts file
-        # The CLI uploads every .socket.facts.json it finds, and Socket lowers
-        # findings based on that data. No scanned repository may supply it.
-        working-directory: target
-        run: |
-          found="$(find . -type f -name '.socket.facts.json*' -print)"
-          [ -z "$found" ] && exit 0
-          while IFS= read -r file; do
-            echo "::error::Reachability facts file committed to the repository: $file"
-          done <<< "$found"
-          exit 2
+            # The same scheme as scripts/get_token.py in lidofinance/infra-mainnet.
+            # The token can only read the contents of this one repository. The
+            # script writes it as a step output; here that output is a file of
+            # this step, read and removed at once.
+            : > "$token_file"
+            if ! GITHUB_OUTPUT="$token_file" TARGET_OWNER="$owner" TARGET_REPO="$name" \
+              python tooling/scripts/get_token.py; then
+              not_scanned "$name" 'no GitHub App token was received'
+              return
+            fi
+            token="$(sed -n 's/^ghs_token=//p' "$token_file")"
+            rm -f "$token_file"
+            token="${token:-$WORKFLOW_TOKEN}"
+
+            # The token goes to git through the environment: it is neither in a
+            # process argument list nor saved in the checkout. git itself does
+            # not get the App key. No code of the repository runs on a clone;
+            # Git LFS files are not downloaded.
+            auth="$(printf 'x-access-token:%s' "$token" | base64 -w 0)"
+            echo "::add-mask::$auth"
+            if ! env -u APP_ID -u APP_PRIVATE_KEY -u WORKFLOW_TOKEN \
+              GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0='http.https://github.com/.extraheader' \
+              GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+              GIT_TERMINAL_PROMPT=0 \
+              GIT_LFS_SKIP_SMUDGE=1 \
+              git clone --quiet --depth 1 --no-tags "https://github.com/$owner/$name" "$target"; then
+              not_scanned "$name" 'the default branch could not be checked out'
+              return
+            fi
+
+            if ! git -C "$target" symbolic-ref --short HEAD > "$state/branch" ||
+              ! git -C "$target" rev-parse HEAD > "$state/sha"; then
+              not_scanned "$name" 'the default branch could not be determined'
+              return
+            fi
+            echo "Checked out $(cat "$state/branch") at $(cat "$state/sha")"
+
+            # See note 3 at the top of this file.
+            rm -rf "$target/.git"
+
+            # The CLI uploads a manifest that is a symbolic link by following it.
+            # A link named like a manifest could point outside the checkout, and
+            # that file of the runner would be sent to Socket.
+            find "$target" -type l -print -delete
+
+            # The CLI uploads every .socket.facts.json it finds, and Socket lowers
+            # findings based on that data. No scanned repository may supply it.
+            facts="$(find "$target" -type f -name '.socket.facts.json*' -print)"
+            if [ -n "$facts" ]; then
+              echo "$facts"
+              not_scanned "$name" 'it contains a reachability facts file'
+            fi
+          }
+
+          mkdir -p "$TARGETS" "$STATE"
+          # The list is read from descriptor 3, so that no command in the loop
+          # can consume it from the standard input.
+          while IFS=$'\t' read -r owner name <&3; do
+            echo "::group::$owner/$name"
+            mkdir -p "$STATE/$name"
+            # One repository that fails must not stop the others.
+            check_out "$owner" "$name" || not_scanned "$name" 'the checkout stopped on an unexpected error'
+            echo '::endgroup::'
+          done 3< "$REPO_LIST"
 
       - name: Install the hash-pinned Socket CLI
         run: |
@@ -195,127 +218,106 @@ jobs:
             -r tooling/.github/tools/socket-python-cli.lock
           socketcli --version
 
-      - name: Scan the default branch
-        working-directory: target
+      - name: Scan every repository
+        # The second pass. See note 2 at the top of this file.
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-          SCAN_BRANCH: ${{ steps.head.outputs.branch }}
-          SCAN_COMMIT: ${{ steps.head.outputs.sha }}
         run: |
           : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository}"
-          mkdir -p "$RUNNER_TEMP/socket"
 
-          # --default-branch    make this scan the head scan of the default branch,
-          #                     which is what the Socket dashboard shows
-          # --report-link-file  the link to the scan in Socket
-          socketcli \
-            --repo "$SCAN_REPO" \
-            --branch "$SCAN_BRANCH" \
-            --commit-sha "$SCAN_COMMIT" \
-            --target-path . \
-            --default-branch \
-            --report-link-file "$RUNNER_TEMP/socket/report-link.txt"
-
-          if [ ! -s "$RUNNER_TEMP/socket/report-link.txt" ]; then
-            echo '::error::The CLI returned no report link. Treat this repository as not scanned.'
-            exit 3
-          fi
-
-      - name: Count malware and vulnerabilities in the scan
-        # Only for the table in the run summary. When the counts cannot be read,
-        # the step warns and the table shows "n/a": the repository is scanned anyway.
-        env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-        run: |
-          not_counted() {
-            echo "::warning::The findings of $SCAN_OWNER/$SCAN_REPO are not counted: $1."
-            rm -f "$RUNNER_TEMP/socket/counts.json"
-            exit 0
+          not_scanned() { # <name> <reason>
+            echo "$2" > "$STATE/$1/error"
+            echo "::error::$1 is not scanned: $2."
           }
 
-          link="$(head -n 1 "$RUNNER_TEMP/socket/report-link.txt")"
-          [[ "$link" =~ ^https://socket\.dev/dashboard/org/([A-Za-z0-9._-]+)/sbom/([0-9a-f-]+)$ ]] ||
-            not_counted 'the report link has an unexpected form'
-          org="${BASH_REMATCH[1]}"
-          scan_id="${BASH_REMATCH[2]}"
+          # Counts the findings of a scan for the table in the run summary. When
+          # they cannot be read, it warns and the table shows "n/a": the
+          # repository is scanned anyway.
+          count_findings() { # <name>
+            local name="$1" state="$STATE/$1" link org scan_id
 
-          # Every package of the scan with its alerts, one JSON document per line.
-          # curl reads the API key from stdin, so the key never appears in a
-          # process argument list.
-          printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
-            curl -fsS --max-time 300 --retry 2 --retry-delay 5 -K - \
-              "$BASE_API_URL/orgs/$org/full-scans/$scan_id" \
-              > "$RUNNER_TEMP/socket/scan.ndjson" ||
-            not_counted 'Socket did not return the scan'
+            link="$(head -n 1 "$state/link")"
+            if ! [[ "$link" =~ ^https://socket\.dev/dashboard/org/([A-Za-z0-9._-]+)/sbom/([0-9a-f-]+)$ ]]; then
+              echo "::warning::The findings of $name are not counted: the report link has an unexpected form."
+              return
+            fi
+            org="${BASH_REMATCH[1]}"
+            scan_id="${BASH_REMATCH[2]}"
 
-          # One alert is one finding in one package version. Alerts that the
-          # organization policy sets to "ignore" are left out.
-          #   malware   known malware and AI-detected potential malware
-          #   critical  vulnerabilities of critical severity
-          #   high      vulnerabilities of high severity
-          jq -s -c '
-            [.[] | (.alerts // [])[] | select(.action != "ignore")]
-            | {
-                malware: map(select(.type == "malware" or .type == "gptMalware")) | length,
-                critical: map(select(.category == "vulnerability" and .severity == "critical")) | length,
-                high: map(select(.category == "vulnerability" and .severity == "high")) | length
-              }
-          ' "$RUNNER_TEMP/socket/scan.ndjson" > "$RUNNER_TEMP/socket/counts.json" ||
-            not_counted 'the answer of Socket could not be read'
-          cat "$RUNNER_TEMP/socket/counts.json"
+            # Every package of the scan with its alerts, one JSON document per
+            # line. curl reads the API key from stdin, so the key never appears
+            # in a process argument list.
+            if ! printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 300 --retry 2 --retry-delay 5 -K - \
+                "$BASE_API_URL/orgs/$org/full-scans/$scan_id" > "$state/scan.ndjson"; then
+              echo "::warning::The findings of $name are not counted: Socket did not return the scan."
+              return
+            fi
 
-      - name: Record the result
-        if: always()
-        env:
-          SCAN_BRANCH: ${{ steps.head.outputs.branch }}
-          SCAN_COMMIT: ${{ steps.head.outputs.sha }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/result"
-          url=''
-          if [ -s "$RUNNER_TEMP/socket/report-link.txt" ]; then
-            url="$(head -n 1 "$RUNNER_TEMP/socket/report-link.txt")"
-            echo "::notice::$SCAN_OWNER/$SCAN_REPO: $url"
-          fi
-          counts='null' # not counted
-          if [ -s "$RUNNER_TEMP/socket/counts.json" ]; then
-            counts="$(cat "$RUNNER_TEMP/socket/counts.json")"
-          fi
-          jq -n \
-            --arg owner "$SCAN_OWNER" \
-            --arg repo "$SCAN_REPO" \
-            --arg branch "$SCAN_BRANCH" \
-            --arg sha "$SCAN_COMMIT" \
-            --arg url "$url" \
-            --argjson counts "$counts" \
-            '{owner: $owner, repo: $repo, branch: $branch, sha: $sha, url: $url, counts: $counts}' \
-            > "$RUNNER_TEMP/result/result.json"
+            # One alert is one finding in one package version. Alerts that the
+            # organization policy sets to "ignore" are left out.
+            #   malware   known malware and AI-detected potential malware
+            #   critical  vulnerabilities of critical severity
+            #   high      vulnerabilities of high severity
+            if ! jq -s -c '
+              [.[] | (.alerts // [])[] | select(.action != "ignore")]
+              | {
+                  malware: map(select(.type == "malware" or .type == "gptMalware")) | length,
+                  critical: map(select(.category == "vulnerability" and .severity == "critical")) | length,
+                  high: map(select(.category == "vulnerability" and .severity == "high")) | length
+                }
+            ' "$state/scan.ndjson" > "$state/counts.json"; then
+              rm -f "$state/counts.json"
+              echo "::warning::The findings of $name are not counted: the answer of Socket could not be read."
+              return
+            fi
+            echo "Findings: $(cat "$state/counts.json")"
+          }
 
-      - name: Upload the result
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: result-${{ matrix.name }}
-          path: ${{ runner.temp }}/result/result.json
-          retention-days: 7
+          scan() { # <owner> <name>
+            local owner="$1" name="$2"
+            local state="$STATE/$name" target="$TARGETS/$name"
 
-  summary:
-    name: Results
-    needs: [list, scan]
-    if: ${{ !cancelled() && needs.list.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: read # download the result artifacts of this run
-    steps:
+            # --default-branch    make this scan the head scan of the default
+            #                     branch, which is what the Socket dashboard shows
+            # --report-link-file  the link to the scan in Socket
+            if ! (
+              cd "$target" &&
+                socketcli \
+                  --repo "$name" \
+                  --branch "$(cat "$state/branch")" \
+                  --commit-sha "$(cat "$state/sha")" \
+                  --target-path . \
+                  --default-branch \
+                  --report-link-file "$state/link"
+            ) || [ ! -s "$state/link" ]; then
+              rm -f "$state/link"
+              not_scanned "$name" 'the Socket scan failed'
+              return
+            fi
+            echo "::notice::$owner/$name: $(head -n 1 "$state/link")"
+            count_findings "$name"
+          }
+
+          while IFS=$'\t' read -r owner name <&3; do
+            echo "::group::$owner/$name"
+            if [ -e "$STATE/$name/error" ]; then
+              echo "Skipped: $(cat "$STATE/$name/error")."
+            else
+              # One repository that fails must not stop the others.
+              scan "$owner" "$name" || not_scanned "$name" 'the scan stopped on an unexpected error'
+            fi
+            rm -rf "${TARGETS:?}/$name"
+            echo '::endgroup::'
+          done 3< "$REPO_LIST"
+
       - name: Publish the list of results
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOS: ${{ needs.list.outputs.repos }}
+        if: ${{ !cancelled() }}
         run: |
-          mkdir results
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --pattern 'result-*' --dir results ||
-            echo '::warning::No result artifacts were downloaded.'
+          if [ ! -s "$REPO_LIST" ]; then
+            echo '::error::The list of repositories was not built.'
+            exit 1
+          fi
 
           failed=0
           {
@@ -326,25 +328,24 @@ jobs:
             echo
             echo '| Repository | Branch | Malware | Critical | High | Results in Socket |'
             echo '| --- | --- | ---: | ---: | ---: | --- |'
-            while read -r owner repo; do
-              file="results/result-$repo/result.json"
-              branch=''
-              url=''
+            while IFS=$'\t' read -r owner name; do
+              state="$STATE/$name"
+              branch="$(cat "$state/branch" 2> /dev/null || true)"
               counts=' | | '
-              if [ -s "$file" ]; then
-                branch="$(jq -r '.branch' "$file")"
-                url="$(jq -r '.url' "$file")"
-              fi
-              if [ -n "$url" ]; then
-                link="$url"
+              if [ -s "$state/link" ] && [ ! -e "$state/error" ]; then
+                link="$(head -n 1 "$state/link")"
                 # "n/a": scanned, but the findings could not be counted.
-                counts="$(jq -r '[.counts.malware, .counts.critical, .counts.high] | map(. // "n/a") | join(" | ")' "$file")"
+                counts='n/a | n/a | n/a'
+                if [ -s "$state/counts.json" ]; then
+                  counts="$(jq -r '[.malware, .critical, .high] | join(" | ")' "$state/counts.json")"
+                fi
               else
-                link='not scanned, see the failed job'
+                reason="$(cat "$state/error" 2> /dev/null || echo 'the job stopped before this repository')"
+                link="not scanned: $reason"
                 failed=$((failed + 1))
               fi
-              echo "| https://github.com/$owner/$repo | ${branch:+\`$branch\`} | $counts | $link |"
-            done < <(jq -r '.[] | "\(.owner) \(.name)"' <<< "$REPOS")
+              echo "| https://github.com/$owner/$name | ${branch:+\`$branch\`} | $counts | $link |"
+            done < "$REPO_LIST"
           } > results.md
           cat results.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -354,7 +355,7 @@ jobs:
           fi
 
       - name: Upload the list of results
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: socket-default-branch-scan-results
