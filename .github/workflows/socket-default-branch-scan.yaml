@@ -66,13 +66,6 @@ jobs:
       # The CLI reads the API address from this variable. Set explicitly, so that
       # the Socket API key cannot be sent anywhere else.
       BASE_API_URL: https://api.socket.dev/v0
-      # owner <tab> name, one repository per line.
-      REPO_LIST: ${{ runner.temp }}/repos.tsv
-      # The checkout of a repository: <TARGETS>/<name>.
-      TARGETS: ${{ runner.temp }}/targets
-      # What is known about a repository: <STATE>/<name>/branch, sha, link,
-      # counts.json, and error when it was not scanned.
-      STATE: ${{ runner.temp }}/state
     steps:
       - name: Check out the repository list, the token script and the CLI lock file
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,6 +82,18 @@ jobs:
         env:
           REPOS: ${{ inputs.repos }}
         run: |
+          # Paths shared by the steps below.
+          #   REPO_LIST  owner <tab> name, one repository per line
+          #   TARGETS    the checkout of a repository: <TARGETS>/<name>
+          #   STATE      what is known about a repository: <STATE>/<name>/branch,
+          #              sha, link, counts.json, and error when it was not scanned
+          REPO_LIST="$RUNNER_TEMP/repos.tsv"
+          {
+            echo "REPO_LIST=$REPO_LIST"
+            echo "TARGETS=$RUNNER_TEMP/targets"
+            echo "STATE=$RUNNER_TEMP/state"
+          } >> "$GITHUB_ENV"
+
           # One link per line, without surrounding spaces and a trailing slash.
           normalize() {
             sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/$##' | grep -v '^$' || true
