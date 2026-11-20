@@ -79,9 +79,12 @@ jobs:
           } >> "$GITHUB_ENV"
 
           # repos.txt is a plain list: one link per line and nothing else.
+          # The name becomes a directory name below, so it starts with a letter,
+          # a digit, "_" or "." and is not "." or "..".
           : > "$REPO_LIST"
           while IFS= read -r link || [ -n "$link" ]; do
-            if [[ "$link" =~ ^https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)$ ]]; then
+            if [[ "$link" =~ ^https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._][A-Za-z0-9._-]*)$ ]] &&
+              [ "${BASH_REMATCH[2]}" != . ] && [ "${BASH_REMATCH[2]}" != .. ]; then
               printf '%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >> "$REPO_LIST"
             else
               echo "::error::repos.txt: not a link of the form https://github.com/<owner>/<name>: '$link'"
@@ -95,7 +98,8 @@ jobs:
           fi
           # Socket identifies a repository by its name alone, so two repositories
           # with one name, even from different owners, would share one entry there.
-          duplicates="$(cut -f 2 "$REPO_LIST" | sort | uniq -d)"
+          # Names that differ only in letter case count as one name.
+          duplicates="$(cut -f 2 "$REPO_LIST" | sort -f | uniq -d -i)"
           if [ -n "$duplicates" ]; then
             echo "::error::repos.txt: repository name listed more than once: $duplicates"
             exit 2
