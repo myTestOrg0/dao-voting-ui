@@ -53,7 +53,7 @@ jobs:
       # the Socket API key cannot be sent anywhere else.
       BASE_API_URL: https://api.socket.dev/v0
     steps:
-      - name: Check out the repository list, the token script and the CLI lock file
+      - name: Check out repos.txt, the token script and the CLI lock file
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: tooling
@@ -64,47 +64,45 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Read the list of repositories
+      - name: Check repos.txt
         run: |
-          # Paths shared by the steps below.
-          #   REPO_LIST  owner <tab> name, one repository per line
-          #   TARGETS    the checkout of a repository: <TARGETS>/<name>
-          #   STATE      what is known about a repository: <STATE>/<name>/branch,
-          #              sha, link, and error when it was not scanned
-          REPO_LIST="$RUNNER_TEMP/repos.tsv"
-          {
-            echo "REPO_LIST=$REPO_LIST"
-            echo "TARGETS=$RUNNER_TEMP/targets"
-            echo "STATE=$RUNNER_TEMP/state"
-          } >> "$GITHUB_ENV"
-
-          # repos.txt is a plain list: one link per line and nothing else.
-          # The name becomes a directory name below, so it starts with a letter,
-          # a digit, "_" or "." and is not "." or "..".
-          : > "$REPO_LIST"
+          # repos.txt is a plain list: one link per line and nothing else. The
+          # steps below read it word by word, so no other form may get through.
+          # The name of a repository becomes a directory name, so it starts with
+          # a letter, a digit, "_" or "." and is not "." or "..".
+          names=''
           while IFS= read -r link || [ -n "$link" ]; do
-            if [[ "$link" =~ ^https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._][A-Za-z0-9._-]*)$ ]] &&
-              [ "${BASH_REMATCH[2]}" != . ] && [ "${BASH_REMATCH[2]}" != .. ]; then
-              printf '%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >> "$REPO_LIST"
-            else
+            name="${link##*/}"
+            if ! [[ "$link" =~ ^https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._][A-Za-z0-9._-]*$ ]] ||
+              [ "$name" = . ] || [ "$name" = .. ]; then
               echo "::error::repos.txt: not a link of the form https://github.com/<owner>/<name>: '$link'"
               exit 2
             fi
+            names+="$name"$'\n'
           done < tooling/repos.txt
 
-          if [ ! -s "$REPO_LIST" ]; then
+          if [ -z "$names" ]; then
             echo '::error::repos.txt is empty.'
             exit 2
           fi
           # Socket identifies a repository by its name alone, so two repositories
           # with one name, even from different owners, would share one entry there.
           # Names that differ only in letter case count as one name.
-          duplicates="$(cut -f 2 "$REPO_LIST" | sort -f | uniq -d -i)"
+          duplicates="$(printf '%s' "$names" | sort -f | uniq -d -i)"
           if [ -n "$duplicates" ]; then
             echo "::error::repos.txt: repository name listed more than once: $duplicates"
             exit 2
           fi
-          echo "Repositories to scan: $(wc -l < "$REPO_LIST")"
+          echo "Repositories to scan: $(printf '%s' "$names" | wc -l)"
+
+          # Paths shared by the steps below, set only when repos.txt is valid.
+          #   TARGETS  the checkout of a repository: <TARGETS>/<name>
+          #   STATE    what is known about a repository: <STATE>/<name>/branch,
+          #            sha, link, and error when it was not scanned
+          {
+            echo "TARGETS=$RUNNER_TEMP/targets"
+            echo "STATE=$RUNNER_TEMP/state"
+          } >> "$GITHUB_ENV"
 
       - name: Check out the default branch of every repository
         # The first of two passes over the list. Every repository is checked out
@@ -121,10 +119,14 @@ jobs:
             echo "::error::$1 is not scanned: $2."
           }
 
-          check_out() { # <owner> <name>
-            local owner="$1" name="$2"
+          check_out() { # <link> <name>
+            local link="$1" name="$2"
             local state="$STATE/$name" target="$TARGETS/$name"
-            local token_file="$RUNNER_TEMP/token.out" token auth facts
+            local token_file="$RUNNER_TEMP/token.out" owner token auth facts
+
+            # https://github.com/<owner>/<name>
+            owner="${link%/*}"
+            owner="${owner##*/}"
 
             # The same scheme as scripts/get_token.py in lidofinance/infra-mainnet.
             # The token can only read the contents of this one repository. The
@@ -152,7 +154,7 @@ jobs:
               GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
               GIT_TERMINAL_PROMPT=0 \
               GIT_LFS_SKIP_SMUDGE=1 \
-              git clone --quiet --depth 1 --no-tags "https://github.com/$owner/$name" "$target"; then
+              git clone --quiet --depth 1 --no-tags "$link" "$target"; then
               not_scanned "$name" 'the default branch could not be checked out'
               return
             fi
@@ -184,14 +186,13 @@ jobs:
           }
 
           mkdir -p "$TARGETS" "$STATE"
-          # The list is read from descriptor 3, so that no command in the loop
-          # can consume it from the standard input.
-          while IFS=$'\t' read -r owner name <&3; do
-            echo "Checking out $owner/$name"
+          for link in $(< tooling/repos.txt); do
+            name="${link##*/}"
+            echo "Checking out $link"
             mkdir -p "$STATE/$name"
             # One repository that fails must not stop the others.
-            check_out "$owner" "$name" || not_scanned "$name" 'the checkout stopped on an unexpected error'
-          done 3< "$REPO_LIST"
+            check_out "$link" "$name" || not_scanned "$name" 'the checkout stopped on an unexpected error'
+          done
           echo 'Done.'
 
       - name: Install the hash-pinned Socket CLI
@@ -237,37 +238,38 @@ jobs:
             echo "Done: $(head -n 1 "$state/link")"
           }
 
-          while IFS=$'\t' read -r owner name <&3; do
+          for link in $(< tooling/repos.txt); do
+            name="${link##*/}"
             if [ -e "$STATE/$name/error" ]; then
-              echo "Skipping $owner/$name: $(cat "$STATE/$name/error")."
+              echo "Skipping $link: $(cat "$STATE/$name/error")."
             else
-              echo "Scanning $owner/$name"
+              echo "Scanning $link"
               # One repository that fails must not stop the others.
               scan "$name" || not_scanned "$name" 'the scan stopped on an unexpected error'
             fi
             rm -rf "${TARGETS:?}/$name"
-          done 3< "$REPO_LIST"
+          done
           echo 'Done.'
 
       - name: Print the results
         if: ${{ !cancelled() }}
         run: |
-          if [ ! -s "$REPO_LIST" ]; then
-            echo '::error::The list of repositories was not built.'
+          if [ -z "${STATE:-}" ]; then
+            echo '::error::repos.txt did not pass the check.'
             exit 1
           fi
 
           failed=0
-          while IFS=$'\t' read -r owner name; do
-            state="$STATE/$name"
+          for link in $(< tooling/repos.txt); do
+            state="$STATE/${link##*/}"
             if [ -s "$state/link" ] && [ ! -e "$state/error" ]; then
               result="$(head -n 1 "$state/link")"
             else
               result="NOT SCANNED: $(cat "$state/error" 2> /dev/null || echo 'the job stopped before this repository')"
               failed=$((failed + 1))
             fi
-            echo "https://github.com/$owner/$name  $result"
-          done < "$REPO_LIST"
+            echo "$link  $result"
+          done
 
           if [ "$failed" -gt 0 ]; then
             echo "::error::$failed repositories were not scanned."
