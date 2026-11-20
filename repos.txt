@@ -1,5 +1,2 @@
-# TEST ONLY: repositories of the test organization.
-https://github.com/myTestOrg0/npm-hello-world
-https://github.com/myTestOrg0/k8s-hello
-# Private, and no GitHub App is configured here: expected to be reported as not scanned.
-https://github.com/myTestOrg0/vexel-private
+# TEST ONLY: a repository of the test organization that has real dependencies.
+https://github.com/myTestOrg0/ethereum-staking-widget-1
