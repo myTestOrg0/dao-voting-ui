@@ -3,7 +3,8 @@
 #
 # Each repository gets one full scan that becomes the head scan of its default
 # branch in Socket, so its alerts show up in the Socket dashboard. The run
-# summary lists every repository with a link to its results in Socket.
+# summary lists every repository with its numbers of malware alerts and of
+# critical and high vulnerabilities, and a link to its results in Socket.
 #
 # Three things here are not obvious:
 #
@@ -17,7 +18,8 @@
 #    a red job means the repository was not scanned.
 #
 # Secrets:
-#   SOCKET_SECURITY_API_KEY  Socket API key of exactly one organization.
+#   SOCKET_SECURITY_API_KEY  Socket API key of exactly one organization, allowed
+#                            to create full scans and to read them.
 #   APP_ID, APP_PRIVATE_KEY  A GitHub App with read access to repository contents,
 #                            installed into the listed repositories. Each job
 #                            gets from it a token for its one repository
@@ -33,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       repos:
-        description: Repository links (https://github.com/<owner>/<name>) separated by spaces. Empty means every repository in repos.txt
+        description: Links from repos.txt (https://github.com/<owner>/<name>) separated by spaces, to scan only those. Empty means every repository in repos.txt
         default: ''
         required: false
 
@@ -66,13 +68,24 @@ jobs:
         env:
           REPOS: ${{ inputs.repos }}
         run: |
+          # One link per line, without surrounding spaces and a trailing slash.
+          normalize() {
+            sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/$##' | grep -v '^$' || true
+          }
+          listed="$({ grep -v -E '^[[:space:]]*(#|$)' repos.txt || true; } | normalize)"
+          links="$listed"
+
           if [ -n "${REPOS// /}" ]; then
-            links="$(tr -s ' ' '\n' <<< "$REPOS")"
-          else
-            links="$(grep -v -E '^[[:space:]]*(#|$)' repos.txt || true)"
+            links="$(tr -s ' ' '\n' <<< "$REPOS" | normalize)"
+            # The input only selects from repos.txt. A scan replaces the default
+            # branch results of the repository with that name in Socket, so which
+            # repositories may be scanned is changed by a reviewed commit only.
+            unlisted="$(grep -v -x -F -f <(printf '%s\n' "$listed") <<< "$links" || true)"
+            if [ -n "$unlisted" ]; then
+              echo "::error::Not listed in repos.txt: $unlisted"
+              exit 2
+            fi
           fi
-          # Trim spaces and one trailing slash.
-          links="$(sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/$##' <<< "$links" | grep -v '^$' || true)"
           if [ -z "$links" ]; then
             echo '::error::The repository list is empty.'
             exit 2
@@ -208,6 +221,49 @@ jobs:
             exit 3
           fi
 
+      - name: Count malware and vulnerabilities in the scan
+        # Only for the table in the run summary. When the counts cannot be read,
+        # the step warns and the table shows "n/a": the repository is scanned anyway.
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          not_counted() {
+            echo "::warning::The findings of $SCAN_OWNER/$SCAN_REPO are not counted: $1."
+            rm -f "$RUNNER_TEMP/socket/counts.json"
+            exit 0
+          }
+
+          link="$(head -n 1 "$RUNNER_TEMP/socket/report-link.txt")"
+          [[ "$link" =~ ^https://socket\.dev/dashboard/org/([A-Za-z0-9._-]+)/sbom/([0-9a-f-]+)$ ]] ||
+            not_counted 'the report link has an unexpected form'
+          org="${BASH_REMATCH[1]}"
+          scan_id="${BASH_REMATCH[2]}"
+
+          # Every package of the scan with its alerts, one JSON document per line.
+          # curl reads the API key from stdin, so the key never appears in a
+          # process argument list.
+          printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+            curl -fsS --max-time 300 --retry 2 --retry-delay 5 -K - \
+              "$BASE_API_URL/orgs/$org/full-scans/$scan_id" \
+              > "$RUNNER_TEMP/socket/scan.ndjson" ||
+            not_counted 'Socket did not return the scan'
+
+          # One alert is one finding in one package version. Alerts that the
+          # organization policy sets to "ignore" are left out.
+          #   malware   known malware and AI-detected potential malware
+          #   critical  vulnerabilities of critical severity
+          #   high      vulnerabilities of high severity
+          jq -s -c '
+            [.[] | (.alerts // [])[] | select(.action != "ignore")]
+            | {
+                malware: map(select(.type == "malware" or .type == "gptMalware")) | length,
+                critical: map(select(.category == "vulnerability" and .severity == "critical")) | length,
+                high: map(select(.category == "vulnerability" and .severity == "high")) | length
+              }
+          ' "$RUNNER_TEMP/socket/scan.ndjson" > "$RUNNER_TEMP/socket/counts.json" ||
+            not_counted 'the answer of Socket could not be read'
+          cat "$RUNNER_TEMP/socket/counts.json"
+
       - name: Record the result
         if: always()
         env:
@@ -220,13 +276,18 @@ jobs:
             url="$(head -n 1 "$RUNNER_TEMP/socket/report-link.txt")"
             echo "::notice::$SCAN_OWNER/$SCAN_REPO: $url"
           fi
+          counts='null' # not counted
+          if [ -s "$RUNNER_TEMP/socket/counts.json" ]; then
+            counts="$(cat "$RUNNER_TEMP/socket/counts.json")"
+          fi
           jq -n \
             --arg owner "$SCAN_OWNER" \
             --arg repo "$SCAN_REPO" \
             --arg branch "$SCAN_BRANCH" \
             --arg sha "$SCAN_COMMIT" \
             --arg url "$url" \
-            '{owner: $owner, repo: $repo, branch: $branch, sha: $sha, url: $url}' \
+            --argjson counts "$counts" \
+            '{owner: $owner, repo: $repo, branch: $branch, sha: $sha, url: $url, counts: $counts}' \
             > "$RUNNER_TEMP/result/result.json"
 
       - name: Upload the result
@@ -260,23 +321,29 @@ jobs:
           {
             echo '## Socket default branch scan'
             echo
-            echo '| Repository | Branch | Results in Socket |'
-            echo '| --- | --- | --- |'
+            echo 'Malware, Critical and High are numbers of alerts: one finding in one package version.'
+            echo 'Critical and High count vulnerabilities only. Alerts that the Socket policy ignores are left out.'
+            echo
+            echo '| Repository | Branch | Malware | Critical | High | Results in Socket |'
+            echo '| --- | --- | ---: | ---: | ---: | --- |'
             while read -r owner repo; do
               file="results/result-$repo/result.json"
               branch=''
               url=''
+              counts=' | | '
               if [ -s "$file" ]; then
                 branch="$(jq -r '.branch' "$file")"
                 url="$(jq -r '.url' "$file")"
               fi
               if [ -n "$url" ]; then
                 link="$url"
+                # "n/a": scanned, but the findings could not be counted.
+                counts="$(jq -r '[.counts.malware, .counts.critical, .counts.high] | map(. // "n/a") | join(" | ")' "$file")"
               else
                 link='not scanned, see the failed job'
                 failed=$((failed + 1))
               fi
-              echo "| https://github.com/$owner/$repo | ${branch:+\`$branch\`} | $link |"
+              echo "| https://github.com/$owner/$repo | ${branch:+\`$branch\`} | $counts | $link |"
             done < <(jq -r '.[] | "\(.owner) \(.name)"' <<< "$REPOS")
           } > results.md
           cat results.md >> "$GITHUB_STEP_SUMMARY"

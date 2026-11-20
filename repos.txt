@@ -1,2 +1,3 @@
-# TEST ONLY: a repository of the test organization that has real dependencies.
+# TEST ONLY: repositories of the test organization.
 https://github.com/myTestOrg0/ethereum-staking-widget-1
+https://github.com/myTestOrg0/npm-hello-world
