@@ -1,0 +1,295 @@
+# Socket scan of the default branch of every repository listed in repos.txt
+# (one link per line: https://github.com/<owner>/<name>).
+#
+# Each repository gets one full scan that becomes the head scan of its default
+# branch in Socket, so its alerts show up in the Socket dashboard. The run
+# summary lists every repository with a link to its results in Socket.
+#
+# Three things here are not obvious:
+#
+# 1. The .git directory is removed before the scan. With a git checkout, Socket
+#    Python CLI 2.11.13 looks at the files of the last commit and may compare
+#    scans instead of creating one. Without it the CLI always creates a full
+#    scan and returns its report link.
+# 2. No reachability analysis and no dependency installation: only the manifest
+#    files of the repository are uploaded, and no code from it is executed.
+# 3. The job never fails on findings. A full scan has no policy gate in this CLI;
+#    a red job means the repository was not scanned.
+#
+# Secrets:
+#   SOCKET_SECURITY_API_KEY  Socket API key of exactly one organization.
+#   APP_ID, APP_PRIVATE_KEY  A GitHub App with read access to repository contents,
+#                            installed into the listed repositories. Each job
+#                            gets from it a token for its one repository
+#                            (scripts/get_token.py). Without the App, or for a
+#                            repository it is not installed into, only public
+#                            repositories can be checked out.
+
+name: Socket default branch scan
+
+on:
+  push:
+    branches: [test/socket-default-branch-scan] # TEST ONLY
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: Repository links (https://github.com/<owner>/<name>) separated by spaces. Empty means every repository in repos.txt
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: socket-default-branch-scan
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  list:
+    name: Read the repository list
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      repos: ${{ steps.list.outputs.repos }}
+    steps:
+      - name: Check out the repository list
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the list
+        id: list
+        env:
+          REPOS: ${{ inputs.repos }}
+        run: |
+          if [ -n "${REPOS// /}" ]; then
+            links="$(tr -s ' ' '\n' <<< "$REPOS")"
+          else
+            links="$(grep -v -E '^[[:space:]]*(#|$)' repos.txt || true)"
+          fi
+          # Trim spaces and one trailing slash.
+          links="$(sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/$##' <<< "$links" | grep -v '^$' || true)"
+          if [ -z "$links" ]; then
+            echo '::error::The repository list is empty.'
+            exit 2
+          fi
+
+          bad="$(grep -v -E '^https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+$' <<< "$links" || true)"
+          if [ -n "$bad" ]; then
+            echo "::error::Not a repository link of the form https://github.com/<owner>/<name>: $bad"
+            exit 2
+          fi
+          # Socket identifies a repository by its name alone, so two repositories
+          # with one name, even from different owners, would share one entry there.
+          duplicates="$(sed -E 's#.*/##' <<< "$links" | sort | uniq -d)"
+          if [ -n "$duplicates" ]; then
+            echo "::error::Repository name listed more than once: $duplicates"
+            exit 2
+          fi
+
+          repos="$(jq -R -s -c '
+            split("\n")
+            | map(select(. != "") | capture("^https://github\\.com/(?<owner>[^/]+)/(?<name>[^/]+)$"))
+          ' <<< "$links")"
+          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+
+  scan:
+    name: ${{ matrix.owner }}/${{ matrix.name }}
+    needs: list
+    runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 8 # a cautious limit on simultaneous Socket API clients, not a measured one
+      matrix:
+        include: ${{ fromJSON(needs.list.outputs.repos) }} # [{owner, name}, ...]
+    env:
+      SCAN_OWNER: ${{ matrix.owner }}
+      SCAN_REPO: ${{ matrix.name }}
+      # The CLI reads the API address from this variable. Set explicitly, so that
+      # the Socket API key cannot be sent anywhere else.
+      BASE_API_URL: https://api.socket.dev/v0
+    steps:
+      - name: Check out the token script and the CLI lock file
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Get a GitHub App token for the repository
+        # The same scheme as scripts/get_token.py in lidofinance/infra-mainnet.
+        # The token can only read the contents of this one repository.
+        # Runs before the Socket CLI is installed, so the private key of the App
+        # is never present in a process that can load third-party packages.
+        id: token
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          TARGET_OWNER: ${{ matrix.owner }}
+          TARGET_REPO: ${{ matrix.name }}
+        run: python tooling/scripts/get_token.py
+
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.owner }}/${{ matrix.name }}
+          # No ref: the default branch of the repository.
+          # Without an App token only a public repository can be checked out.
+          token: ${{ steps.token.outputs.ghs_token || github.token }}
+          path: target
+          persist-credentials: false
+
+      - name: Record the branch and the commit
+        id: head
+        working-directory: target
+        run: |
+          echo "branch=$(git symbolic-ref --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # See note 1 at the top of this file.
+          rm -rf .git
+
+      - name: Remove symbolic links from the checkout
+        # The CLI uploads a manifest that is a symbolic link by following it. A
+        # link named like a manifest could point outside the checkout, and that
+        # file of the runner would be sent to Socket.
+        working-directory: target
+        run: find . -type l -print -delete
+
+      - name: Fail when the repository contains a reachability facts file
+        # The CLI uploads every .socket.facts.json it finds, and Socket lowers
+        # findings based on that data. No scanned repository may supply it.
+        working-directory: target
+        run: |
+          found="$(find . -type f -name '.socket.facts.json*' -print)"
+          [ -z "$found" ] && exit 0
+          while IFS= read -r file; do
+            echo "::error::Reachability facts file committed to the repository: $file"
+          done <<< "$found"
+          exit 2
+
+      - name: Install the hash-pinned Socket CLI
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: \
+            -r tooling/.github/tools/socket-python-cli.lock
+          socketcli --version
+
+      - name: Scan the default branch
+        working-directory: target
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          SCAN_BRANCH: ${{ steps.head.outputs.branch }}
+          SCAN_COMMIT: ${{ steps.head.outputs.sha }}
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository}"
+          mkdir -p "$RUNNER_TEMP/socket"
+
+          # --default-branch    make this scan the head scan of the default branch,
+          #                     which is what the Socket dashboard shows
+          # --report-link-file  the link to the scan in Socket
+          socketcli \
+            --repo "$SCAN_REPO" \
+            --branch "$SCAN_BRANCH" \
+            --commit-sha "$SCAN_COMMIT" \
+            --target-path . \
+            --default-branch \
+            --report-link-file "$RUNNER_TEMP/socket/report-link.txt"
+
+          if [ ! -s "$RUNNER_TEMP/socket/report-link.txt" ]; then
+            echo '::error::The CLI returned no report link. Treat this repository as not scanned.'
+            exit 3
+          fi
+
+      - name: Record the result
+        if: always()
+        env:
+          SCAN_BRANCH: ${{ steps.head.outputs.branch }}
+          SCAN_COMMIT: ${{ steps.head.outputs.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/result"
+          url=''
+          if [ -s "$RUNNER_TEMP/socket/report-link.txt" ]; then
+            url="$(head -n 1 "$RUNNER_TEMP/socket/report-link.txt")"
+            echo "::notice::$SCAN_OWNER/$SCAN_REPO: $url"
+          fi
+          jq -n \
+            --arg owner "$SCAN_OWNER" \
+            --arg repo "$SCAN_REPO" \
+            --arg branch "$SCAN_BRANCH" \
+            --arg sha "$SCAN_COMMIT" \
+            --arg url "$url" \
+            '{owner: $owner, repo: $repo, branch: $branch, sha: $sha, url: $url}' \
+            > "$RUNNER_TEMP/result/result.json"
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: result-${{ matrix.name }}
+          path: ${{ runner.temp }}/result/result.json
+          retention-days: 7
+
+  summary:
+    name: Results
+    needs: [list, scan]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # download the result artifacts of this run
+    steps:
+      - name: Publish the list of results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOS: ${{ needs.list.outputs.repos }}
+        run: |
+          mkdir results
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'result-*' --dir results ||
+            echo '::warning::No result artifacts were downloaded.'
+
+          failed=0
+          {
+            echo '## Socket default branch scan'
+            echo
+            echo '| Repository | Branch | Results in Socket |'
+            echo '| --- | --- | --- |'
+            while read -r owner repo; do
+              file="results/result-$repo/result.json"
+              branch=''
+              url=''
+              if [ -s "$file" ]; then
+                branch="$(jq -r '.branch' "$file")"
+                url="$(jq -r '.url' "$file")"
+              fi
+              if [ -n "$url" ]; then
+                link="$url"
+              else
+                link='not scanned, see the failed job'
+                failed=$((failed + 1))
+              fi
+              echo "| https://github.com/$owner/$repo | ${branch:+\`$branch\`} | $link |"
+            done < <(jq -r '.[] | "\(.owner) \(.name)"' <<< "$REPOS")
+          } > results.md
+          cat results.md >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::$failed repositories were not scanned."
+            exit 1
+          fi
+
+      - name: Upload the list of results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: socket-default-branch-scan-results
+          path: results.md
+          retention-days: 30

@@ -1,0 +1,5 @@
+# TEST ONLY: repositories of the test organization.
+https://github.com/myTestOrg0/npm-hello-world
+https://github.com/myTestOrg0/k8s-hello
+# Private, and no GitHub App is configured here: expected to be reported as not scanned.
+https://github.com/myTestOrg0/vexel-private
