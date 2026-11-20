@@ -6,20 +6,12 @@
 # summary lists every repository with its numbers of malware alerts and of
 # critical and high vulnerabilities, and a link to its results in Socket.
 #
-# Four things here are not obvious:
+# One job scans all repositories, one after another: a job per repository would
+# spend most of its time on setup and is billed at least a minute each.
 #
-# 1. One job scans all repositories, one after another. A job per repository
-#    would spend most of its time on setup and is billed at least a minute each.
-# 2. Two passes. The first one checks out every repository with the GitHub App
-#    key; only then the Socket CLI is installed and the second pass scans. So the
-#    private key of the App is never present next to third-party packages, and
-#    the Socket API key is never present while repositories are being fetched.
-# 3. The .git directory is removed before the scan. With a git checkout, Socket
-#    Python CLI 2.11.13 looks at the files of the last commit and may compare
-#    scans instead of creating one. Without it the CLI always creates a full
-#    scan and returns its report link.
-# 4. No reachability analysis and no dependency installation: only the manifest
-#    files of a repository are uploaded, and no code from it is executed.
+# Only the manifest files of a repository are uploaded. No dependencies are
+# installed, no code from a repository is executed, and no reachability analysis
+# is run.
 #
 # A repository that cannot be scanned does not stop the others. The job never
 # fails on findings; it fails when at least one repository was not scanned.
@@ -40,18 +32,13 @@ on:
   push:
     branches: [test/socket-default-branch-scan] # TEST ONLY
   workflow_dispatch:
-    inputs:
-      repos:
-        description: Links from repos.txt (https://github.com/<owner>/<name>) separated by spaces, to scan only those. Empty means every repository in repos.txt
-        default: ''
-        required: false
 
 permissions:
   contents: read
 
+# One run at a time: a second run waits for the first one to finish.
 concurrency:
   group: socket-default-branch-scan
-  cancel-in-progress: false
 
 defaults:
   run:
@@ -79,8 +66,6 @@ jobs:
           python-version: '3.12'
 
       - name: Build the list of repositories
-        env:
-          REPOS: ${{ inputs.repos }}
         run: |
           # Paths shared by the steps below.
           #   REPO_LIST  owner <tab> name, one repository per line
@@ -94,24 +79,12 @@ jobs:
             echo "STATE=$RUNNER_TEMP/state"
           } >> "$GITHUB_ENV"
 
-          # One link per line, without surrounding spaces and a trailing slash.
-          normalize() {
-            sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/$##' | grep -v '^$' || true
-          }
-          listed="$({ grep -v -E '^[[:space:]]*(#|$)' tooling/repos.txt || true; } | normalize)"
-          links="$listed"
-
-          if [ -n "${REPOS// /}" ]; then
-            links="$(tr -s ' ' '\n' <<< "$REPOS" | normalize)"
-            # The input only selects from repos.txt. A scan replaces the default
-            # branch results of the repository with that name in Socket, so which
-            # repositories may be scanned is changed by a reviewed commit only.
-            unlisted="$(grep -v -x -F -f <(printf '%s\n' "$listed") <<< "$links" || true)"
-            if [ -n "$unlisted" ]; then
-              echo "::error::Not listed in repos.txt: $unlisted"
-              exit 2
-            fi
-          fi
+          # The links of repos.txt: no comments and empty lines, no surrounding
+          # spaces, no trailing slash.
+          links="$(
+            { grep -v -E '^[[:space:]]*(#|$)' tooling/repos.txt || true; } |
+              sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/$##'
+          )"
           if [ -z "$links" ]; then
             echo '::error::The repository list is empty.'
             exit 2
@@ -134,7 +107,9 @@ jobs:
           echo "Repositories to scan: $(wc -l < "$REPO_LIST")"
 
       - name: Check out the default branch of every repository
-        # The first pass. See note 2 at the top of this file.
+        # The first of two passes over the list. Every repository is checked out
+        # here, before the Socket CLI is installed, so the private key of the App
+        # is never present next to third-party packages.
         env:
           APP_ID: ${{ secrets.APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
@@ -189,7 +164,9 @@ jobs:
             fi
             echo "Checked out $(cat "$state/branch") at $(cat "$state/sha")"
 
-            # See note 3 at the top of this file.
+            # With a git checkout, Socket Python CLI 2.11.13 looks at the files of
+            # the last commit and may compare scans instead of creating one.
+            # Without .git it always creates a full scan and returns its link.
             rm -rf "$target/.git"
 
             # The CLI uploads a manifest that is a symbolic link by following it.
@@ -224,7 +201,8 @@ jobs:
           socketcli --version
 
       - name: Scan every repository
-        # The second pass. See note 2 at the top of this file.
+        # The second pass. The Socket API key is present only here, after all
+        # repositories have been fetched.
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: |
