@@ -2,9 +2,9 @@
 # (one link per line: https://github.com/<owner>/<name>).
 #
 # Each repository gets one full scan that becomes the head scan of its default
-# branch in Socket, so its alerts show up in the Socket dashboard. The run
-# summary lists every repository with its numbers of malware alerts and of
-# critical and high vulnerabilities, and a link to its results in Socket.
+# branch in Socket, so its alerts show up in the Socket dashboard. The log says
+# which repository is being processed, and ends with a list of every repository
+# and the link to its results in Socket.
 #
 # One job scans all repositories, one after another: a job per repository would
 # spend most of its time on setup and is billed at least a minute each.
@@ -17,8 +17,7 @@
 # fails on findings; it fails when at least one repository was not scanned.
 #
 # Secrets:
-#   SOCKET_SECURITY_API_KEY  Socket API key of exactly one organization, allowed
-#                            to create full scans and to read them.
+#   SOCKET_SECURITY_API_KEY  Socket API key of exactly one organization.
 #   APP_ID, APP_PRIVATE_KEY  A GitHub App with read access to repository contents,
 #                            installed into the listed repositories. For every
 #                            repository a token limited to it is requested
@@ -71,7 +70,7 @@ jobs:
           #   REPO_LIST  owner <tab> name, one repository per line
           #   TARGETS    the checkout of a repository: <TARGETS>/<name>
           #   STATE      what is known about a repository: <STATE>/<name>/branch,
-          #              sha, link, counts.json, and error when it was not scanned
+          #              sha, link, and error when it was not scanned
           REPO_LIST="$RUNNER_TEMP/repos.tsv"
           {
             echo "REPO_LIST=$REPO_LIST"
@@ -187,12 +186,12 @@ jobs:
           # The list is read from descriptor 3, so that no command in the loop
           # can consume it from the standard input.
           while IFS=$'\t' read -r owner name <&3; do
-            echo "::group::$owner/$name"
+            echo "Checking out $owner/$name"
             mkdir -p "$STATE/$name"
             # One repository that fails must not stop the others.
             check_out "$owner" "$name" || not_scanned "$name" 'the checkout stopped on an unexpected error'
-            echo '::endgroup::'
           done 3< "$REPO_LIST"
+          echo 'Done.'
 
       - name: Install the hash-pinned Socket CLI
         run: |
@@ -213,52 +212,8 @@ jobs:
             echo "::error::$1 is not scanned: $2."
           }
 
-          # Counts the findings of a scan for the table in the run summary. When
-          # they cannot be read, it warns and the table shows "n/a": the
-          # repository is scanned anyway.
-          count_findings() { # <name>
-            local name="$1" state="$STATE/$1" link org scan_id
-
-            link="$(head -n 1 "$state/link")"
-            if ! [[ "$link" =~ ^https://socket\.dev/dashboard/org/([A-Za-z0-9._-]+)/sbom/([0-9a-f-]+)$ ]]; then
-              echo "::warning::The findings of $name are not counted: the report link has an unexpected form."
-              return
-            fi
-            org="${BASH_REMATCH[1]}"
-            scan_id="${BASH_REMATCH[2]}"
-
-            # Every package of the scan with its alerts, one JSON document per
-            # line. curl reads the API key from stdin, so the key never appears
-            # in a process argument list.
-            if ! printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
-              curl -fsS --max-time 300 --retry 2 --retry-delay 5 -K - \
-                "$BASE_API_URL/orgs/$org/full-scans/$scan_id" > "$state/scan.ndjson"; then
-              echo "::warning::The findings of $name are not counted: Socket did not return the scan."
-              return
-            fi
-
-            # One alert is one finding in one package version. Alerts that the
-            # organization policy sets to "ignore" are left out.
-            #   malware   known malware and AI-detected potential malware
-            #   critical  vulnerabilities of critical severity
-            #   high      vulnerabilities of high severity
-            if ! jq -s -c '
-              [.[] | (.alerts // [])[] | select(.action != "ignore")]
-              | {
-                  malware: map(select(.type == "malware" or .type == "gptMalware")) | length,
-                  critical: map(select(.category == "vulnerability" and .severity == "critical")) | length,
-                  high: map(select(.category == "vulnerability" and .severity == "high")) | length
-                }
-            ' "$state/scan.ndjson" > "$state/counts.json"; then
-              rm -f "$state/counts.json"
-              echo "::warning::The findings of $name are not counted: the answer of Socket could not be read."
-              return
-            fi
-            echo "Findings: $(cat "$state/counts.json")"
-          }
-
-          scan() { # <owner> <name>
-            local owner="$1" name="$2"
+          scan() { # <name>
+            local name="$1"
             local state="$STATE/$name" target="$TARGETS/$name"
 
             # --default-branch    make this scan the head scan of the default
@@ -278,23 +233,22 @@ jobs:
               not_scanned "$name" 'the Socket scan failed'
               return
             fi
-            echo "::notice::$owner/$name: $(head -n 1 "$state/link")"
-            count_findings "$name"
+            echo "Done: $(head -n 1 "$state/link")"
           }
 
           while IFS=$'\t' read -r owner name <&3; do
-            echo "::group::$owner/$name"
             if [ -e "$STATE/$name/error" ]; then
-              echo "Skipped: $(cat "$STATE/$name/error")."
+              echo "Skipping $owner/$name: $(cat "$STATE/$name/error")."
             else
+              echo "Scanning $owner/$name"
               # One repository that fails must not stop the others.
-              scan "$owner" "$name" || not_scanned "$name" 'the scan stopped on an unexpected error'
+              scan "$name" || not_scanned "$name" 'the scan stopped on an unexpected error'
             fi
             rm -rf "${TARGETS:?}/$name"
-            echo '::endgroup::'
           done 3< "$REPO_LIST"
+          echo 'Done.'
 
-      - name: Publish the list of results
+      - name: Print the results
         if: ${{ !cancelled() }}
         run: |
           if [ ! -s "$REPO_LIST" ]; then
@@ -303,44 +257,18 @@ jobs:
           fi
 
           failed=0
-          {
-            echo '## Socket default branch scan'
-            echo
-            echo 'Malware, Critical and High are numbers of alerts: one finding in one package version.'
-            echo 'Critical and High count vulnerabilities only. Alerts that the Socket policy ignores are left out.'
-            echo
-            echo '| Repository | Branch | Malware | Critical | High | Results in Socket |'
-            echo '| --- | --- | ---: | ---: | ---: | --- |'
-            while IFS=$'\t' read -r owner name; do
-              state="$STATE/$name"
-              branch="$(cat "$state/branch" 2> /dev/null || true)"
-              counts=' | | '
-              if [ -s "$state/link" ] && [ ! -e "$state/error" ]; then
-                link="$(head -n 1 "$state/link")"
-                # "n/a": scanned, but the findings could not be counted.
-                counts='n/a | n/a | n/a'
-                if [ -s "$state/counts.json" ]; then
-                  counts="$(jq -r '[.malware, .critical, .high] | join(" | ")' "$state/counts.json")"
-                fi
-              else
-                reason="$(cat "$state/error" 2> /dev/null || echo 'the job stopped before this repository')"
-                link="not scanned: $reason"
-                failed=$((failed + 1))
-              fi
-              echo "| https://github.com/$owner/$name | ${branch:+\`$branch\`} | $counts | $link |"
-            done < "$REPO_LIST"
-          } > results.md
-          cat results.md >> "$GITHUB_STEP_SUMMARY"
+          while IFS=$'\t' read -r owner name; do
+            state="$STATE/$name"
+            if [ -s "$state/link" ] && [ ! -e "$state/error" ]; then
+              result="$(head -n 1 "$state/link")"
+            else
+              result="NOT SCANNED: $(cat "$state/error" 2> /dev/null || echo 'the job stopped before this repository')"
+              failed=$((failed + 1))
+            fi
+            echo "https://github.com/$owner/$name  $result"
+          done < "$REPO_LIST"
 
           if [ "$failed" -gt 0 ]; then
             echo "::error::$failed repositories were not scanned."
             exit 1
           fi
-
-      - name: Upload the list of results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: socket-default-branch-scan-results
-          path: results.md
-          retention-days: 30
