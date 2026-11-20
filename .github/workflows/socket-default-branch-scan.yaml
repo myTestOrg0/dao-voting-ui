@@ -1,5 +1,5 @@
 # Socket scan of the default branch of every repository listed in repos.txt
-# (one link per line: https://github.com/<owner>/<name>).
+# (a plain list, one link per line: https://github.com/<owner>/<name>).
 #
 # Each repository gets one full scan that becomes the head scan of its default
 # branch in Socket, so its alerts show up in the Socket dashboard. The log says
@@ -64,7 +64,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build the list of repositories
+      - name: Read the list of repositories
         run: |
           # Paths shared by the steps below.
           #   REPO_LIST  owner <tab> name, one repository per line
@@ -78,31 +78,28 @@ jobs:
             echo "STATE=$RUNNER_TEMP/state"
           } >> "$GITHUB_ENV"
 
-          # The links of repos.txt: no comments and empty lines, no surrounding
-          # spaces, no trailing slash.
-          links="$(
-            { grep -v -E '^[[:space:]]*(#|$)' tooling/repos.txt || true; } |
-              sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/$##'
-          )"
-          if [ -z "$links" ]; then
-            echo '::error::The repository list is empty.'
-            exit 2
-          fi
+          # repos.txt is a plain list: one link per line and nothing else.
+          : > "$REPO_LIST"
+          while IFS= read -r link || [ -n "$link" ]; do
+            if [[ "$link" =~ ^https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)$ ]]; then
+              printf '%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >> "$REPO_LIST"
+            else
+              echo "::error::repos.txt: not a link of the form https://github.com/<owner>/<name>: '$link'"
+              exit 2
+            fi
+          done < tooling/repos.txt
 
-          bad="$(grep -v -E '^https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+$' <<< "$links" || true)"
-          if [ -n "$bad" ]; then
-            echo "::error::Not a repository link of the form https://github.com/<owner>/<name>: $bad"
+          if [ ! -s "$REPO_LIST" ]; then
+            echo '::error::repos.txt is empty.'
             exit 2
           fi
           # Socket identifies a repository by its name alone, so two repositories
           # with one name, even from different owners, would share one entry there.
-          duplicates="$(sed -E 's#.*/##' <<< "$links" | sort | uniq -d)"
+          duplicates="$(cut -f 2 "$REPO_LIST" | sort | uniq -d)"
           if [ -n "$duplicates" ]; then
-            echo "::error::Repository name listed more than once: $duplicates"
+            echo "::error::repos.txt: repository name listed more than once: $duplicates"
             exit 2
           fi
-
-          sed -E 's#^https://github\.com/([^/]+)/([^/]+)$#\1\t\2#' <<< "$links" > "$REPO_LIST"
           echo "Repositories to scan: $(wc -l < "$REPO_LIST")"
 
       - name: Check out the default branch of every repository
