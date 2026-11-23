@@ -12,6 +12,9 @@ on:
   push:
     branches:
       - sockettest/release-scan
+    paths-ignore:
+      - .github/workflows/socket-release-probe.yaml
+      - .github/tools/socket-probe-capture.py
   workflow_dispatch:
   release:
     types:

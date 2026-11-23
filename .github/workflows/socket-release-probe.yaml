@@ -1,0 +1,190 @@
+# PROTOTYPE. Two one-off checks for the release scan design:
+#
+# 1. "network": what leaves the runner while Socket scans the application with
+#    reachability analysis. Every HTTPS request goes through a local mitmproxy.
+# 2. "trivy": which library vulnerabilities Trivy finds in the built image, to
+#    compare with the Socket scan of the same commit.
+#
+# This repository is public, so nothing secret may reach the artifacts.
+
+name: Socket release probe (prototype)
+
+on:
+  push:
+    branches:
+      - sockettest/release-scan
+    paths:
+      - .github/workflows/socket-release-probe.yaml
+      - .github/tools/socket-probe-capture.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  network:
+    name: Network capture of a reachability scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      BASE_API_URL: https://api.socket.dev/v0
+      REACH_ENGINE_VERSION: 15.15.2
+      CAPTURE_DIR: ${{ runner.temp }}/capture
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: candidate
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Install the Socket CLI and mitmproxy
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: \
+            -r candidate/.github/tools/socket-release-cli.lock
+          python -m venv "$RUNNER_TEMP/mitm"
+          "$RUNNER_TEMP/mitm/bin/pip" install --quiet mitmproxy
+          node --version
+
+      - name: Start the proxy and the connection log
+        run: |
+          mkdir -p "$CAPTURE_DIR"
+          cp candidate/.github/tools/socket-probe-capture.py "$RUNNER_TEMP/capture.py"
+          nohup "$RUNNER_TEMP/mitm/bin/mitmdump" --listen-host 127.0.0.1 --listen-port 8080 \
+            --set confdir="$RUNNER_TEMP/mitmconf" --set stream_large_bodies=0 \
+            -s "$RUNNER_TEMP/capture.py" > "$CAPTURE_DIR/mitmdump.log" 2>&1 &
+          # Connections that bypass the proxy show up here: every new outgoing
+          # TCP connection and every DNS question.
+          sudo nohup tcpdump -i any -nn -l \
+            '(tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn and not dst net 127.0.0.0/8) or udp dst port 53' \
+            > "$CAPTURE_DIR/tcpdump.log" 2>&1 &
+          for _ in $(seq 30); do
+            [ -s "$RUNNER_TEMP/mitmconf/mitmproxy-ca-cert.pem" ] && break
+            sleep 1
+          done
+          cat /etc/ssl/certs/ca-certificates.crt "$RUNNER_TEMP/mitmconf/mitmproxy-ca-cert.pem" \
+            > "$RUNNER_TEMP/ca-bundle.pem"
+
+      - name: Scan through the proxy
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          NPM_CONFIG_IGNORE_SCRIPTS: 'true'
+          HTTPS_PROXY: http://127.0.0.1:8080
+          HTTP_PROXY: http://127.0.0.1:8080
+          https_proxy: http://127.0.0.1:8080
+          http_proxy: http://127.0.0.1:8080
+          NODE_USE_ENV_PROXY: '1'
+          NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/mitmconf/mitmproxy-ca-cert.pem
+          REQUESTS_CA_BUNDLE: ${{ runner.temp }}/ca-bundle.pem
+          SSL_CERT_FILE: ${{ runner.temp }}/ca-bundle.pem
+          NPM_CONFIG_CAFILE: ${{ runner.temp }}/ca-bundle.pem
+          XDG_CACHE_HOME: ${{ runner.temp }}/xdg
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?missing}"
+          mkdir -p "$RUNNER_TEMP/socket"
+          status=0
+          socketcli \
+            --repo release-poc-probe \
+            --branch "$GITHUB_REF_NAME" \
+            --commit-sha "$GITHUB_SHA" \
+            --target-path . \
+            --strict-blocking \
+            --ignore-commit-files \
+            --json-file "$RUNNER_TEMP/socket/report.json" \
+            --reach --reach-disable-analytics --reach-version "$REACH_ENGINE_VERSION" \
+            || status=$?
+          echo "CLI exit code: $status"
+          cp .socket.facts.json "$CAPTURE_DIR/socket.facts.json" 2>/dev/null || echo 'no facts file'
+
+      - name: Summarize and remove anything secret
+        if: always()
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          sleep 3
+          sudo pkill tcpdump || true
+          pkill -f mitmdump || true
+          cd "$CAPTURE_DIR"
+          # The artifacts of a public repository are public: drop every file that holds the key.
+          if [ -n "$SOCKET_SECURITY_API_KEY" ]; then
+            grep -rlF -- "$SOCKET_SECURITY_API_KEY" . | while IFS= read -r file; do
+              echo "::warning::Removed $file: it contained the Socket API key"
+              rm -f -- "$file"
+            done
+            encoded="$(printf '%s:' "$SOCKET_SECURITY_API_KEY" | base64 -w0)"
+            grep -rlF -- "$encoded" . | xargs -r rm -f --
+          fi
+          rm -f mitmdump.log
+          echo '## Requests by host and path'
+          jq -r '[.method, .host, .path, .request_type, .request_bytes, .status] | @tsv' requests.jsonl \
+            | sed -E 's#[0-9a-f]{8}-[0-9a-f-]{27}#<id>#g' \
+            | awk -F'\t' '{k=$1" "$2" "$3" ["$4"]"; n[k]++; b[k]+=$5} END {for (k in n) print n[k], b[k], k}' \
+            | sort -k2,2nr | head -80
+          echo '## Hosts'
+          jq -r '.host' requests.jsonl | sort | uniq -c | sort -rn
+          echo '## Direct connections and DNS questions (bypassing the proxy)'
+          grep -c . tcpdump.log || true
+          grep -oE ' (A|AAAA)\? [^ ]+' tcpdump.log | sort | uniq -c | sort -rn | head -40
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: socket-probe-network
+          path: ${{ runner.temp }}/capture/
+          include-hidden-files: true
+          retention-days: 3
+
+  trivy:
+    name: Trivy library findings of the built image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb # v0.76.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image
+        run: docker build --tag probe:local .
+
+      - name: Scan libraries with Trivy
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy"
+          docker save --output "$RUNNER_TEMP/trivy/image.tar" probe:local
+          for types in library os; do
+            docker run --rm \
+              --volume "$RUNNER_TEMP/trivy:/work" \
+              "$TRIVY_IMAGE" image \
+              --input /work/image.tar \
+              --format json \
+              --output "/work/trivy-$types.json" \
+              --exit-code 0 \
+              --pkg-types "$types" \
+              --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+              --scanners vuln \
+              --list-all-pkgs
+          done
+          sudo rm -f "$RUNNER_TEMP/trivy/image.tar"
+          jq -r '.Results[]? | [.Target, .Type, ((.Packages // []) | length), ((.Vulnerabilities // []) | length)] | @tsv' \
+            "$RUNNER_TEMP/trivy/trivy-library.json" | sort -t$'\t' -k4,4nr | head -40
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: socket-probe-trivy
+          path: ${{ runner.temp }}/trivy/
+          retention-days: 3
