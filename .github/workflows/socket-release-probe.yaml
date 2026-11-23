@@ -160,10 +160,17 @@ jobs:
 
       - name: Build the image
         run: |
-          # The lock file of this test branch is behind package.json, and the
-          # Dockerfile installs with --frozen-lockfile. Let yarn complete it here.
-          sed -i 's/ --frozen-lockfile//' Dockerfile
-          docker build --tag probe:local .
+          # The application of this test branch does not build, and its lock file is
+          # behind package.json. The comparison needs only the installed
+          # dependencies, so the image stops after the install step of the Dockerfile.
+          printf '%s\n' \
+            'FROM node:20-alpine' \
+            'WORKDIR /app' \
+            'RUN apk add --no-cache git=~2' \
+            'COPY package.json yarn.lock ./' \
+            'RUN yarn install --non-interactive --ignore-scripts && yarn cache clean' \
+            > "$RUNNER_TEMP/Dockerfile.probe"
+          docker build --tag probe:local --file "$RUNNER_TEMP/Dockerfile.probe" .
           docker run --rm --entrypoint cat probe:local /app/yarn.lock > "$RUNNER_TEMP/yarn.lock.built"
           mkdir -p "$RUNNER_TEMP/trivy" && cp "$RUNNER_TEMP/yarn.lock.built" "$RUNNER_TEMP/trivy/yarn.lock.built"
           diff <(grep -c . yarn.lock) <(grep -c . "$RUNNER_TEMP/yarn.lock.built") || true
