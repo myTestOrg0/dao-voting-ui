@@ -83,8 +83,6 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: 'true'
           HTTPS_PROXY: http://127.0.0.1:8080
           HTTP_PROXY: http://127.0.0.1:8080
-          https_proxy: http://127.0.0.1:8080
-          http_proxy: http://127.0.0.1:8080
           NODE_USE_ENV_PROXY: '1'
           NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/mitmconf/mitmproxy-ca-cert.pem
           REQUESTS_CA_BUNDLE: ${{ runner.temp }}/ca-bundle.pem
