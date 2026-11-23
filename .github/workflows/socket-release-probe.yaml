@@ -32,8 +32,10 @@ jobs:
     env:
       BASE_API_URL: https://api.socket.dev/v0
       REACH_ENGINE_VERSION: 15.15.2
-      CAPTURE_DIR: ${{ runner.temp }}/capture
     steps:
+      - name: Set the capture directory
+        run: echo "CAPTURE_DIR=$RUNNER_TEMP/capture" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: candidate
