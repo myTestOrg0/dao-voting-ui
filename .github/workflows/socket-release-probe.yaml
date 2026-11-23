@@ -62,7 +62,7 @@ jobs:
           mkdir -p "$CAPTURE_DIR"
           cp candidate/.github/tools/socket-probe-capture.py "$RUNNER_TEMP/capture.py"
           nohup "$RUNNER_TEMP/mitm/bin/mitmdump" --listen-host 127.0.0.1 --listen-port 8080 \
-            --set confdir="$RUNNER_TEMP/mitmconf" --set stream_large_bodies=0 \
+            --set confdir="$RUNNER_TEMP/mitmconf" \
             -s "$RUNNER_TEMP/capture.py" > "$CAPTURE_DIR/mitmdump.log" 2>&1 &
           # Connections that bypass the proxy show up here: every new outgoing
           # TCP connection and every DNS question.
@@ -117,12 +117,12 @@ jobs:
           cd "$CAPTURE_DIR"
           # The artifacts of a public repository are public: drop every file that holds the key.
           if [ -n "$SOCKET_SECURITY_API_KEY" ]; then
-            grep -rlF -- "$SOCKET_SECURITY_API_KEY" . | while IFS= read -r file; do
+            { grep -rlF -- "$SOCKET_SECURITY_API_KEY" . || true; } | while IFS= read -r file; do
               echo "::warning::Removed $file: it contained the Socket API key"
               rm -f -- "$file"
             done
             encoded="$(printf '%s:' "$SOCKET_SECURITY_API_KEY" | base64 -w0)"
-            grep -rlF -- "$encoded" . | xargs -r rm -f --
+            { grep -rlF -- "$encoded" . || true; } | xargs -r rm -f --
           fi
           rm -f mitmdump.log
           echo '## Requests by host and path'
@@ -159,7 +159,14 @@ jobs:
           persist-credentials: false
 
       - name: Build the image
-        run: docker build --tag probe:local .
+        run: |
+          # The lock file of this test branch is behind package.json, and the
+          # Dockerfile installs with --frozen-lockfile. Let yarn complete it here.
+          sed -i 's/ --frozen-lockfile//' Dockerfile
+          docker build --tag probe:local .
+          docker run --rm --entrypoint cat probe:local /app/yarn.lock > "$RUNNER_TEMP/yarn.lock.built"
+          mkdir -p "$RUNNER_TEMP/trivy" && cp "$RUNNER_TEMP/yarn.lock.built" "$RUNNER_TEMP/trivy/yarn.lock.built"
+          diff <(grep -c . yarn.lock) <(grep -c . "$RUNNER_TEMP/yarn.lock.built") || true
 
       - name: Scan libraries with Trivy
         run: |
