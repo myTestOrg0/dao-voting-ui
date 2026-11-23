@@ -6,11 +6,11 @@
 #
 # Four things here are not obvious:
 #
-# 1. --strict-blocking. Socket Python CLI 2.13.2 compares the PR with the head
-#    scan of the default branch in Socket, or with an empty scan it creates
-#    itself when the repository has none. With this flag it reports and gates
-#    both the findings the PR adds and the ones already there, so the whole
-#    snapshot is covered whatever the PR is compared with.
+# 1. Empty baseline scan. Each run compares the PR with its own empty scan, so
+#    every finding is new and the whole snapshot is reported. Compared with the
+#    head scan of the default branch, Socket Python CLI 2.13.2 leaves out the
+#    findings of packages it counts as updated or replaced, even with
+#    --strict-blocking.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on a reopened
 #    PR. Forcing one supported action keeps every PR event on the same scan path.
 # 3. Reachability with a fallback. The scan runs with --reach, which lowers
@@ -92,6 +92,47 @@ jobs:
           npm --version
           uv --version
 
+      - name: Create the empty baseline scan
+        id: baseline
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event}"
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
+          cd "$RUNNER_TEMP/socket-empty"
+
+          # The API accepts only known manifest names. An empty facts document is
+          # the placeholder the CLI itself uses for an empty scan.
+          echo '{"components": []}' > .socket.facts.json
+
+          # curl reads the API key from stdin, so the key never appears in a
+          # process argument list.
+          socket_api() {
+            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 60 -K - "$@"
+          }
+
+          org="$(socket_api "$BASE_API_URL/organizations" |
+            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
+          if [ -z "$org" ]; then
+            echo '::error::The Socket API key must belong to exactly one organization.'
+            exit 3
+          fi
+
+          # tmp=true keeps this service scan out of the Socket dashboard. The CLI
+          # has no flag for it, so this one request goes to the API directly.
+          socket_api -X POST \
+            -F '.socket.facts.json=@.socket.facts.json' \
+            "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" \
+            > "$RUNNER_TEMP/socket/baseline.json"
+
+          scan_id="$(jq -r '.id // empty' "$RUNNER_TEMP/socket/baseline.json")"
+          if [ -z "$scan_id" ]; then
+            echo '::error::Socket did not return the ID of the empty baseline scan.'
+            exit 3
+          fi
+          echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
+
       - name: Check out the PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -120,17 +161,15 @@ jobs:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
           GH_API_TOKEN: ${{ github.token }}
           EVENT_ACTION: synchronize
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
           REACHABILITY: ${{ vars.SOCKET_REACHABILITY }}
           # The reachability engine downloads packages with npm. It must never run
           # their install scripts in this step, which holds both tokens.
           NPM_CONFIG_IGNORE_SCRIPTS: 'true'
         run: |
-          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event}"
-          mkdir -p "$RUNNER_TEMP/socket"
-
+          # --base-scan-id        compare with the empty baseline: every finding is new
           # --ignore-commit-files scan even when the PR touches no manifest file
-          # --strict-blocking     report and fail on the findings already in the
-          #                       branch too, not only on the ones the PR adds
+          # --strict-blocking     fail on any Block, not only on new ones
           # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
           # --disable-overview    one security comment, no second overview comment
           # --reach               analyse the code and lower findings that are not reachable
@@ -156,6 +195,7 @@ jobs:
               --commit-sha "$SCAN_COMMIT" \
               --pr-number "$PR_NUMBER" \
               --target-path . \
+              --base-scan-id "$BASELINE_SCAN_ID" \
               --ignore-commit-files \
               --strict-blocking \
               --disable-ignore \
@@ -181,11 +221,13 @@ jobs:
           fi
           exit "$status"
 
-      - name: Confirm that Socket compared the scan with a baseline
+      - name: Confirm that Socket compared the scan with the empty baseline
         # A green scan step is not enough: the CLI exits 0 when it skips the scan
         # or creates a plain full scan, and it never blocks on one. Runs after a
         # Block failure too, but not after a cancel.
         if: github.event_name == 'pull_request' && !cancelled()
+        env:
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
         run: |
           report="$RUNNER_TEMP/socket/report.json"
           not_scanned() {
@@ -201,9 +243,10 @@ jobs:
           # After a comparison the report links to .../diff/<baseline scan>/<this scan>.
           # After a plain full scan the same field links to .../sbom/<this scan>.
           # The CLI itself exits 3 when Socket marks the comparison incomplete.
-          jq -e '.full_scan_id as $scan
-            | (.diff_url // "") | test("/diff/[0-9a-f-]{36}/" + $scan + "$")' "$report" > /dev/null ||
-            not_scanned 'the CLI did not compare this scan with a baseline'
+          jq -e --arg baseline "$BASELINE_SCAN_ID" \
+            '(.diff_url // "") | endswith("/diff/" + $baseline + "/" + $ARGS.named.scan)' \
+            --arg scan "$(jq -r '.full_scan_id' "$report")" "$report" > /dev/null ||
+            not_scanned 'the CLI did not compare this scan with the empty baseline scan'
 
       - name: Publish the job summary
         if: always()
