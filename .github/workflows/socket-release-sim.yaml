@@ -29,7 +29,7 @@ jobs:
         include:
           # The application itself: real manifests and code for reachability.
           - scenario: app
-            ref: ${{ github.sha }}
+            ref: ${{ github.ref_name }}
             target: prod
             socket_repo: release-poc-app
           # One clean dependency.
@@ -43,6 +43,12 @@ jobs:
             target: prod
             socket_repo: release-poc-clean-nogit
             checkout_mode: nogit
+          # The same without reachability analysis: does the scan become the head scan pointer?
+          - scenario: clean-noreach
+            ref: sockettest/release-fx-clean
+            target: prod
+            socket_repo: release-poc-clean-noreach
+            reachability: 'off'
           # Vulnerable dependencies and one known-malicious version.
           - scenario: block
             ref: sockettest/release-fx-block
@@ -64,5 +70,6 @@ jobs:
       target: ${{ matrix.target }}
       socket_repo: ${{ matrix.socket_repo }}
       checkout_mode: ${{ matrix.checkout_mode || 'git' }}
+      reachability: ${{ matrix.reachability || '' }}
     secrets:
       SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}

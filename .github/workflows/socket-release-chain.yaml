@@ -20,6 +20,10 @@ on:
         required: false
         type: string
         default: git
+      reachability:
+        required: false
+        type: string
+        default: ''
     secrets:
       SOCKET_SECURITY_API_KEY:
         required: true
@@ -56,6 +60,7 @@ jobs:
       target: ${{ inputs.target }}
       socket_repo: ${{ inputs.socket_repo }}
       checkout_mode: ${{ inputs.checkout_mode }}
+      reachability: ${{ inputs.reachability }}
     secrets:
       SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
 

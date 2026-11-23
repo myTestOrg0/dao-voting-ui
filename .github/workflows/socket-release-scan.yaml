@@ -46,6 +46,11 @@ on:
         required: false
         type: string
         default: git
+      reachability:
+        description: 'Test only. "off" scans without reachability analysis'
+        required: false
+        type: string
+        default: ''
     secrets:
       SOCKET_SECURITY_API_KEY:
         required: true
@@ -128,7 +133,7 @@ jobs:
         working-directory: candidate
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-          REACHABILITY: ${{ vars.SOCKET_REACHABILITY }}
+          REACHABILITY: ${{ inputs.reachability || vars.SOCKET_REACHABILITY }}
           # The reachability engine downloads packages with npm. It must never run
           # their install scripts in this step, which holds the Socket API key.
           NPM_CONFIG_IGNORE_SCRIPTS: 'true'
@@ -152,7 +157,7 @@ jobs:
             --reach-version "$REACH_ENGINE_VERSION"
           )
           if [ "${REACHABILITY,,}" = off ]; then # any letter case
-            echo '::notice::Reachability analysis is switched off by the repository variable SOCKET_REACHABILITY.'
+            echo '::notice::Reachability analysis is switched off (repository variable SOCKET_REACHABILITY or the test input).'
             reach_flags=()
           fi
 
