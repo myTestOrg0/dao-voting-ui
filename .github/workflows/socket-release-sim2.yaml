@@ -24,18 +24,23 @@ jobs:
           - scenario: app
             ref: sockettest/release-scan
             target: prod
+            with_key: true
           - scenario: clean
             ref: sockettest/release-fx-clean
             target: staging
+            with_key: true
           - scenario: block
             ref: sockettest/release-fx-block
             target: prod
+            with_key: true
           - scenario: block-dev
             ref: sockettest/release-fx-block
             target: dev
+            with_key: true
           - scenario: empty
             ref: sockettest/release-fx-empty
             target: critical
+            with_key: true
           - scenario: nokey-dev
             ref: sockettest/release-fx-clean
             target: dev
@@ -48,6 +53,6 @@ jobs:
     with:
       ref: ${{ matrix.ref }}
       target: ${{ matrix.target }}
-      with_key: ${{ matrix.with_key != false }}
+      with_key: ${{ matrix.with_key }}
     secrets:
       SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
