@@ -1,0 +1,53 @@
+# TEST ONLY. Runs the release scan workflow of the central repository (its copy
+# in the test organization) from this repository, once per scenario.
+
+name: Socket release simulation, central workflow (test)
+
+on:
+  push:
+    branches:
+      - sockettest/release-scan
+    paths:
+      - .github/workflows/socket-release-sim2.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: ${{ matrix.scenario }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: app
+            ref: sockettest/release-scan
+            target: prod
+          - scenario: clean
+            ref: sockettest/release-fx-clean
+            target: staging
+          - scenario: block
+            ref: sockettest/release-fx-block
+            target: prod
+          - scenario: block-dev
+            ref: sockettest/release-fx-block
+            target: dev
+          - scenario: empty
+            ref: sockettest/release-fx-empty
+            target: critical
+          - scenario: nokey-dev
+            ref: sockettest/release-fx-clean
+            target: dev
+            with_key: false
+          - scenario: nokey-prod
+            ref: sockettest/release-fx-clean
+            target: prod
+            with_key: false
+    uses: myTestOrg0/actions/.github/workflows/socket-release-chain-test.yml@sockettest/release-scan
+    with:
+      ref: ${{ matrix.ref }}
+      target: ${{ matrix.target }}
+      with_key: ${{ matrix.with_key != false }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}

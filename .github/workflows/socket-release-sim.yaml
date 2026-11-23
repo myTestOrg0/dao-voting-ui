@@ -15,6 +15,7 @@ on:
     paths-ignore:
       - .github/workflows/socket-release-probe.yaml
       - .github/tools/socket-probe-capture.py
+      - .github/workflows/socket-release-sim2.yaml
   workflow_dispatch:
   release:
     types:
