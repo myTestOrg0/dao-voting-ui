@@ -65,7 +65,8 @@
     "uuid": "^8.3.2",
     "viem": "2.31.3",
     "wagmi": "2.15.6",
-    "lodash": "4.17.11"
+    "lodash": "4.17.11",
+    "chalk": "5.6.1"
   },
   "devDependencies": {
     "@commitlint/cli": "17.3.0",
