@@ -1,0 +1,255 @@
+# PROTOTYPE. Socket dependency scan of a release commit, called from the release
+# workflow between "validate" and "publish".
+#
+# Scans every dependency manifest of the given commit and stops the release when
+# the organization policy says Block.
+#
+# Three things here are not obvious:
+#
+# 1. No --scm github. With it Socket Python CLI 2.13.2 creates a plain full scan
+#    on workflow_dispatch and exits 0 without scanning on workflow_run and
+#    release. Without it the CLI compares the scan with the head scan of the
+#    repository in Socket, or with an empty scan it creates itself.
+# 2. --strict-blocking. The CLI blocks only after a comparison. With this flag
+#    it gates the findings already in the head scan too, so the whole snapshot
+#    is covered whatever the scan is compared with.
+# 3. --default-branch. The scan becomes the head scan of the repository in
+#    Socket, which is what the Socket dashboard shows.
+#
+# Scan exit codes: 0 = no Block (Warn is allowed), 1 = Block, 2 = invalid CLI
+# flags, 3 = Socket API or runtime error, a missing token included.
+
+name: Socket release scan (prototype)
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Commit to scan, already validated by the caller
+        required: true
+        type: string
+      source_branch:
+        description: Branch the commit was released from
+        required: true
+        type: string
+      target:
+        description: 'Deployment target: dev, staging, prod, or critical'
+        required: true
+        type: string
+      socket_repo:
+        description: Test only. Repository name in Socket; the GitHub name when empty
+        required: false
+        type: string
+        default: ''
+      checkout_mode:
+        description: 'Test only. "git" scans a git checkout, "nogit" removes .git first'
+        required: false
+        type: string
+        default: git
+    secrets:
+      SOCKET_SECURITY_API_KEY:
+        required: true
+    outputs:
+      verdict:
+        description: pass, block, or not-scanned
+        value: ${{ jobs.scan.outputs.verdict }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Socket dependency security
+    runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+    env:
+      SCAN_REPO: ${{ inputs.socket_repo || github.event.repository.name }}
+      SCAN_BRANCH: ${{ inputs.source_branch }}
+      SCAN_COMMIT: ${{ inputs.source_sha }}
+      TARGET: ${{ inputs.target }}
+      CHECKOUT_MODE: ${{ inputs.checkout_mode }}
+      # Set explicitly so that no .env file in the scanned commit can redirect the API key elsewhere.
+      BASE_API_URL: https://api.socket.dev/v0
+      # The reachability engine (Coana CLI). Update together with the CLI lock file.
+      REACH_ENGINE_VERSION: 15.15.2
+    steps:
+      - name: Check out the scanner lock file
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # In this test repository the lock file lives next to the workflow.
+          ref: ${{ github.workflow_sha }}
+          path: tooling
+          sparse-checkout: .github/tools
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js for the reachability engine
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22' # the engine needs 22.13 or newer
+
+      - name: Install the hash-pinned Socket CLI
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: \
+            -r tooling/.github/tools/socket-release-cli.lock
+          socketcli --version
+
+      - name: Check out the release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fail when the commit contains a reachability facts file
+        # The CLI uploads every .socket.facts.json it finds, and Socket lowers
+        # findings based on that data. Only this workflow may produce that file.
+        working-directory: candidate
+        run: |
+          found="$(find . -path ./.git -prune -o \( -type f -o -type l \) -name '.socket.facts.json*' -print)"
+          [ -z "$found" ] && exit 0
+          while IFS= read -r file; do
+            echo "::error::Reachability facts file committed to the repository: $file"
+          done <<< "$found"
+          exit 2
+
+      - name: Scan the release commit
+        id: scan
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          REACHABILITY: ${{ vars.SOCKET_REACHABILITY }}
+          # The reachability engine downloads packages with npm. It must never run
+          # their install scripts in this step, which holds the Socket API key.
+          NPM_CONFIG_IGNORE_SCRIPTS: 'true'
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event}"
+          mkdir -p "$RUNNER_TEMP/socket"
+
+          # --ignore-commit-files  compare scans in a git checkout, whatever the last commit touched
+          # --enable-diff          the same without a git checkout
+          # --strict-blocking      fail on the findings already in the head scan too
+          # --default-branch       make this scan the head scan in Socket
+          mode_flags=(--ignore-commit-files)
+          if [ "$CHECKOUT_MODE" = nogit ]; then
+            rm -rf .git
+            mode_flags=(--enable-diff)
+          fi
+
+          reach_flags=(
+            --reach
+            --reach-disable-analytics
+            --reach-version "$REACH_ENGINE_VERSION"
+          )
+          if [ "${REACHABILITY,,}" = off ]; then # any letter case
+            echo '::notice::Reachability analysis is switched off by the repository variable SOCKET_REACHABILITY.'
+            reach_flags=()
+          fi
+
+          scan() {
+            socketcli \
+              --repo "$SCAN_REPO" \
+              --branch "$SCAN_BRANCH" \
+              --commit-sha "$SCAN_COMMIT" \
+              --target-path . \
+              --strict-blocking \
+              --default-branch \
+              --json-file "$RUNNER_TEMP/socket/report.json" \
+              --summary-file "$RUNNER_TEMP/socket/summary.txt" \
+              "${mode_flags[@]}" \
+              "${reach_flags[@]}"
+          }
+
+          status=0
+          scan || status=$?
+
+          # Exit 3 without a report: the first attempt failed before it assessed
+          # anything, most often in the reachability analysis. Scan again without it.
+          if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ] && [ "${#reach_flags[@]}" -gt 0 ]; then
+            echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
+            touch "$RUNNER_TEMP/socket/reachability-fallback"
+            find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
+            reach_flags=()
+            status=0
+            scan || status=$?
+          fi
+
+          # The verdict step decides what the exit code means for this target.
+          echo "CLI exit code: $status"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Decide the verdict
+        id: verdict
+        if: ${{ !cancelled() }}
+        env:
+          STATUS: ${{ steps.scan.outputs.status }}
+        run: |
+          report="$RUNNER_TEMP/socket/report.json"
+
+          # PROTOTYPE: show what the report holds, to learn its shape in this mode.
+          if [ -s "$report" ]; then
+            jq '{keys: keys, full_scan_id, diff_url, report_url, scan_failed,
+                 new_alerts: ((.new_alerts // []) | length),
+                 unchanged_alerts: ((.unchanged_alerts // []) | length)}' "$report" || true
+          fi
+
+          # After a comparison the report links to .../diff/<baseline scan>/<this scan>.
+          # After a plain full scan the same field links to .../sbom/<this scan>,
+          # and the CLI never blocks on one.
+          compared=false
+          if [ -s "$report" ] && jq -e '.full_scan_id as $scan
+            | (.diff_url // "") | test("/diff/[0-9a-f-]{36}/" + $scan + "$")' "$report" > /dev/null; then
+            compared=true
+          fi
+
+          if [ "$STATUS" = 1 ]; then
+            verdict=block
+          elif [ "$STATUS" = 0 ] && [ "$compared" = true ]; then
+            verdict=pass
+          else
+            verdict=not-scanned
+          fi
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "CLI exit code: ${STATUS:-none}; compared with a baseline: $compared; verdict: $verdict"
+
+          {
+            echo "## Socket release scan: $verdict"
+            echo
+            echo "Target \`$TARGET\`, Socket repository \`$SCAN_REPO\`, commit \`$SCAN_COMMIT\`, CLI exit code \`${STATUS:-none}\`, compared with a baseline: \`$compared\`."
+            [ -e "$RUNNER_TEMP/socket/reachability-fallback" ] && echo && echo 'Scanned without reachability analysis: the first attempt produced no report.'
+            if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
+              echo
+              echo '```text'
+              head -c 900000 "$RUNNER_TEMP/socket/summary.txt" # GitHub rejects summaries above 1 MiB
+              echo
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$verdict" = pass ] && exit 0
+          # The same rule as for Trivy: dev reports, every other target is gated.
+          if [ "$TARGET" = dev ]; then
+            echo "::warning::Socket verdict is \"$verdict\". Target dev is report-only, the release continues."
+            exit 0
+          fi
+          echo "::error::Socket verdict is \"$verdict\". The release is stopped."
+          exit 1
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: socket-release-${{ inputs.socket_repo || github.event.repository.name }}-${{ inputs.target }}
+          path: ${{ runner.temp }}/socket/
+          if-no-files-found: warn
+          retention-days: 7

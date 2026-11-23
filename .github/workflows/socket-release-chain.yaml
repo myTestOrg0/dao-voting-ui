@@ -1,0 +1,71 @@
+# PROTOTYPE. One simulated release: validate -> Socket -> publish.
+# "validate" and "publish" stand in for the jobs of k8s-build-push-harbor.yml.
+
+name: Socket release chain (prototype)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch or commit that plays the released tag
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      socket_repo:
+        required: true
+        type: string
+      checkout_mode:
+        required: false
+        type: string
+        default: git
+    secrets:
+      SOCKET_SECURITY_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate source (placeholder)
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      source_branch: ${{ steps.source.outputs.source_branch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - id: source
+        shell: bash
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "source_branch=$REF" >> "$GITHUB_OUTPUT"
+
+  socket:
+    needs: validate
+    uses: ./.github/workflows/socket-release-scan.yaml
+    with:
+      source_sha: ${{ needs.validate.outputs.source_sha }}
+      source_branch: ${{ needs.validate.outputs.source_branch }}
+      target: ${{ inputs.target }}
+      socket_repo: ${{ inputs.socket_repo }}
+      checkout_mode: ${{ inputs.checkout_mode }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+
+  publish:
+    name: Build and publish image (placeholder)
+    needs: [validate, socket]
+    runs-on: ubuntu-24.04
+    steps:
+      - shell: bash
+        env:
+          VERDICT: ${{ needs.socket.outputs.verdict }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+        run: echo "Would build and push $SOURCE_SHA. Socket verdict - $VERDICT."

@@ -1,0 +1,68 @@
+# PROTOTYPE. Runs the simulated release chain once per scenario.
+#
+# Every scenario has its own repository name in Socket, so its head scan does
+# not touch the one the PR scan tests compare with.
+#
+# The push trigger exists only because a workflow that is not on the default
+# branch cannot be started by hand before it has run once.
+
+name: Socket release simulation (prototype)
+
+on:
+  push:
+    branches:
+      - sockettest/release-scan
+  workflow_dispatch:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: ${{ matrix.scenario }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The application itself: real manifests and code for reachability.
+          - scenario: app
+            ref: ${{ github.sha }}
+            target: prod
+            socket_repo: release-poc-app
+          # One clean dependency.
+          - scenario: clean
+            ref: sockettest/release-fx-clean
+            target: prod
+            socket_repo: release-poc-clean
+          # The same without a git checkout.
+          - scenario: clean-nogit
+            ref: sockettest/release-fx-clean
+            target: prod
+            socket_repo: release-poc-clean-nogit
+            checkout_mode: nogit
+          # Vulnerable dependencies and one known-malicious version.
+          - scenario: block
+            ref: sockettest/release-fx-block
+            target: prod
+            socket_repo: release-poc-block
+          # The same for dev, which only reports.
+          - scenario: block-dev
+            ref: sockettest/release-fx-block
+            target: dev
+            socket_repo: release-poc-block-dev
+          # No dependency manifest at all.
+          - scenario: empty
+            ref: sockettest/release-fx-empty
+            target: prod
+            socket_repo: release-poc-empty
+    uses: ./.github/workflows/socket-release-chain.yaml
+    with:
+      ref: ${{ matrix.ref }}
+      target: ${{ matrix.target }}
+      socket_repo: ${{ matrix.socket_repo }}
+      checkout_mode: ${{ matrix.checkout_mode || 'git' }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
