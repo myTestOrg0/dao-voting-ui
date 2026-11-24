@@ -101,6 +101,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/trivy"
           git rev-parse HEAD > "$RUNNER_TEMP/trivy/commit.txt"
           [ -e build-info.json ] || echo '{}' > build-info.json
+          # onchain-mon pins an apk version that the builder image no longer has.
+          sed -i -E 's/(apk add.*) git=[^ ]+/\1 git/' "$DOCKERFILE"
           docker build --tag probe:local --file "$DOCKERFILE" .
           docker image inspect --format '{{json .Config}}' probe:local > "$RUNNER_TEMP/trivy/config.json"
           docker save --output "$RUNNER_TEMP/trivy/image.tar" probe:local
