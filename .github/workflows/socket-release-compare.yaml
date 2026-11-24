@@ -1,0 +1,176 @@
+# PROTOTYPE. One-off comparison of Trivy and Socket for the release scan design.
+#
+# 1. "base": library findings Trivy reports in base images alone, with no
+#    application in them.
+# 2. "image": builds public projects from their own Dockerfile and scans the
+#    image with Trivy. This job runs project code and holds no secret.
+# 3. "socket": scans the manifests of the same commits with Socket. This job
+#    holds the API key and runs no project code.
+#
+# This repository is public. Only public projects are scanned here.
+
+name: Socket release compare (prototype)
+
+on:
+  push:
+    branches:
+      - sockettest/release-scan
+    paths:
+      - .github/workflows/socket-release-compare.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb # v0.76.2
+
+jobs:
+  base:
+    name: Base image ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: node-24-alpine, image: 'node:24-alpine' }
+          - { id: node-22-alpine, image: 'node:22-alpine' }
+          - { id: node-24-slim, image: 'node:24-slim' }
+          - { id: python-311-slim, image: 'python:3.11-slim-trixie' }
+          - { id: python-312-slim, image: 'python:3.12-slim-trixie' }
+          - { id: python-314-slim, image: 'python:3.14-slim' }
+          - { id: alpine-324, image: 'alpine:3.24' }
+          - { id: nginx-alpine, image: 'nginx:alpine' }
+          - { id: nginx-unprivileged, image: 'nginx/nginx-unprivileged:1.31-alpine' }
+          - { id: distroless-static, image: 'gcr.io/distroless/static-debian13:nonroot' }
+    steps:
+      - name: Scan the base image
+        shell: bash
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy"
+          docker pull --quiet "$IMAGE"
+          docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" > "$RUNNER_TEMP/trivy/digest.txt"
+          docker save --output "$RUNNER_TEMP/trivy/image.tar" "$IMAGE"
+          for types in library os; do
+            docker run --rm --volume "$RUNNER_TEMP/trivy:/work" "$TRIVY_IMAGE" image \
+              --input /work/image.tar --format json --output "/work/trivy-$types.json" \
+              --exit-code 0 --pkg-types "$types" --scanners vuln --list-all-pkgs \
+              --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          done
+          sudo rm -f "$RUNNER_TEMP/trivy/image.tar"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: base-${{ matrix.id }}
+          path: ${{ runner.temp }}/trivy/
+          retention-days: 3
+
+  image:
+    name: Image of ${{ matrix.repo }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: &projects
+          - { repo: ethereum-head-watcher, dockerfile: Dockerfile }
+          - { repo: sm-sentinel, dockerfile: Dockerfile }
+          - { repo: validator-exit-bot, dockerfile: Dockerfile }
+          - { repo: onchain-mon, dockerfile: Dockerfile }
+          - { repo: keys-api-versioned, dockerfile: Dockerfile }
+          - { repo: csm-prover-tool, dockerfile: Dockerfile }
+          - { repo: lido-keys-api, dockerfile: Dockerfile }
+          - { repo: ethereum-validators-monitoring, dockerfile: Dockerfile }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lidofinance/${{ matrix.repo }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build and scan the image
+        shell: bash
+        working-directory: candidate
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy"
+          git rev-parse HEAD > "$RUNNER_TEMP/trivy/commit.txt"
+          [ -e build-info.json ] || echo '{}' > build-info.json
+          docker build --tag probe:local --file "$DOCKERFILE" .
+          docker image inspect --format '{{json .Config}}' probe:local > "$RUNNER_TEMP/trivy/config.json"
+          docker save --output "$RUNNER_TEMP/trivy/image.tar" probe:local
+          for types in library os; do
+            docker run --rm --volume "$RUNNER_TEMP/trivy:/work" "$TRIVY_IMAGE" image \
+              --input /work/image.tar --format json --output "/work/trivy-$types.json" \
+              --exit-code 0 --pkg-types "$types" --scanners vuln --list-all-pkgs \
+              --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          done
+          sudo rm -f "$RUNNER_TEMP/trivy/image.tar"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: image-${{ matrix.repo }}
+          path: ${{ runner.temp }}/trivy/
+          retention-days: 3
+
+  socket:
+    name: Socket scan of ${{ matrix.repo }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include: *projects
+    env:
+      BASE_API_URL: https://api.socket.dev/v0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lidofinance/${{ matrix.repo }}
+          path: candidate
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Scan the manifests
+        shell: bash
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          SCAN_REPO: release-poc-cmp-${{ matrix.repo }}
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?missing}"
+          python -m pip install --quiet --require-hashes --only-binary=:all: \
+            -r ../tooling/.github/tools/socket-release-cli.lock
+          mkdir -p "$RUNNER_TEMP/socket"
+          git rev-parse HEAD > "$RUNNER_TEMP/socket/commit.txt"
+          status=0
+          socketcli \
+            --repo "$SCAN_REPO" \
+            --branch compare \
+            --commit-sha "$(git rev-parse HEAD)" \
+            --target-path . \
+            --ignore-commit-files \
+            --json-file "$RUNNER_TEMP/socket/report.json" \
+            || status=$?
+          echo "CLI exit code: $status"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: socket-${{ matrix.repo }}
+          path: ${{ runner.temp }}/socket/
+          retention-days: 3
