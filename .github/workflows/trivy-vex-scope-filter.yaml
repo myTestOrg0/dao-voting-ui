@@ -1,0 +1,143 @@
+# TEST: repo + expiry scoping of lidofinance/vex statements in the release workflow.
+#
+# Proposed change to lidofinance/actions k8s-build-push-harbor.yml: after
+# `trivy vex repo download`, run .github/scripts/vex_scope_filter.py on the downloaded
+# `internal` repository, then scan with `--vex repo` exactly as today.
+#
+# Image: real lidofinance/ethereum-staking-widget (develop), docker save -> trivy --input,
+# same Trivy image digest and flags as the release workflow, CRITICAL gate.
+# VEX: prod pkg/npm/next/vex.json (sha256 checked) on myTestOrg0/vexel-private
+# branch add-prod-next-vex, laid into Trivy's cache under the prod name `internal`.
+#
+# Cases (read the steps in order):
+#   A. no filter (today's release workflow), built by myTestOrg0/dao-voting-ui -> suppressed = LEAK
+#   B. filter, real $GITHUB_REPOSITORY (myTestOrg0/dao-voting-ui)              -> reported
+#   C. filter, repository lidofinance/ethereum-staking-widget                    -> suppressed
+#   D. filter, same repository, date 2027-01-24 (entry expires 2027-01-23)      -> reported
+name: Trivy VEX scope filter test
+
+on:
+  push:
+    branches: [test/vex-scope-filter]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb  # v0.76.2
+  VEX_FILE_SHA256: 7e0e3b6407657e85c6b362430a221d96fd0f6bfbc87e526326d4be06f25e3c99
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Prepare - checkout this repo (filter script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: self
+          persist-credentials: false
+
+      - name: Prepare - checkout widget (public, develop)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lidofinance/ethereum-staking-widget
+          ref: develop
+          path: widget
+          persist-credentials: false
+
+      - name: Prepare - build image, docker save
+        run: |
+          echo "widget commit: $(git -C widget rev-parse HEAD)"
+          docker build -q -t local-build:widget widget
+          docker save -o image.tar local-build:widget
+
+      - name: Prepare - checkout VEX mirror (private)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: myTestOrg0/vexel-private
+          ref: add-prod-next-vex
+          token: ${{ secrets.VEX_REPO_TOKEN }}
+          path: vexsrc
+          persist-credentials: false
+
+      - name: Prepare - Trivy DB and VEX config
+        run: |
+          echo "${VEX_FILE_SHA256}  vexsrc/pkg/npm/next/vex.json" | sha256sum -c -
+          mkdir -p db-cache
+          docker run --rm -v "$PWD/db-cache:/cache" -e TRIVY_CACHE_DIR=/cache "$TRIVY_IMAGE" image --download-db-only -q
+          printf 'repositories:\n  - name: internal\n    url: https://github.com/lidofinance/vex\n    enabled: true\n' > repository.yaml
+          # helper used by every case: fresh cache = what `trivy vex repo download` leaves
+          cat > case.sh <<'SH'
+          set -uo pipefail
+          name=$1
+          C="$PWD/case-$name"; rm -rf "$C"; mkdir -p "$C"
+          cp -r db-cache/db "$C/"
+          R="$C/vex/repositories/internal"; mkdir -p "$R/0.1"
+          (cd vexsrc && git archive HEAD) | tar -x -C "$R/0.1"
+          cp "$R/0.1/vex-repository.json" "$R/"
+          printf '{"UpdatedAt":"%s","ETags":{}}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/cache.json"
+          if [ -n "${SCOPE_REPOSITORY:-}" ]; then
+            echo "--- filter: repository=$SCOPE_REPOSITORY"
+            python3 -I self/.github/scripts/vex_scope_filter.py "$R/0.1" "$SCOPE_REPOSITORY" > "filter-$name.log" || exit 1
+            grep -E 'GHSA-|documents kept' "filter-$name.log"
+          else
+            echo "--- no filter (today's release workflow)"
+          fi
+          docker run --rm -v "$C:/cache" -v "$PWD/repository.yaml:/root/.trivy/vex/repository.yaml:ro" \
+            -v "$PWD/image.tar:/input/image.tar:ro" -e TRIVY_CACHE_DIR=/cache -e GITHUB_TOKEN= \
+            "$TRIVY_IMAGE" image --input /input/image.tar --skip-db-update \
+            --vex repo --skip-vex-repo-update --show-suppressed \
+            --scanners vuln --severity CRITICAL --exit-code 1 -q --format json > "r-$name.json"
+          rc=$?
+          docker run --rm -v "$PWD:/w" "$TRIVY_IMAGE" convert --format table --show-suppressed "/w/r-$name.json"
+          echo "gate exit code: $rc"; echo "$rc" > "rc-$name"
+          SH
+
+      - name: "A. NO filter (today), built by myTestOrg0/dao-voting-ui - expect suppressed = leak"
+        run: bash case.sh A
+
+      - name: "B. filter, real GITHUB_REPOSITORY - expect reported"
+        env:
+          SCOPE_REPOSITORY: ${{ github.repository }}
+        run: bash case.sh B
+
+      - name: "C. filter as lidofinance/ethereum-staking-widget - expect suppressed"
+        env:
+          SCOPE_REPOSITORY: lidofinance/ethereum-staking-widget
+        run: bash case.sh C
+
+      - name: "D. filter as lidofinance/ethereum-staking-widget on 2027-01-24 - expect reported"
+        env:
+          SCOPE_REPOSITORY: lidofinance/ethereum-staking-widget
+          VEX_TODAY: "2027-01-24"
+        run: bash case.sh D
+
+      - name: Result
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          ghsas = ["GHSA-2xp9-vwfh-vxw4", "GHSA-2464-fhr4-w9xw"]
+          cases = {"A": ("no filter, myTestOrg0/dao-voting-ui", "🟢"),
+                   "B": (f"filter, {os.environ['GITHUB_REPOSITORY']}", "🔴"),
+                   "C": ("filter, lidofinance/ethereum-staking-widget", "🟢"),
+                   "D": ("filter, ethereum-staking-widget, 2027-01-24", "🔴")}
+          def state(n, g):
+              for r in json.load(open(f"r-{n}.json")).get("Results") or []:
+                  if any(v["VulnerabilityID"] == g for v in r.get("Vulnerabilities") or []): return "🔴 reported"
+                  if any(m["Finding"]["VulnerabilityID"] == g for m in r.get("ExperimentalModifiedFindings") or []): return "🟢 suppressed"
+              return "⚪ absent"
+          rows = ["| case | " + " | ".join(ghsas) + " | CRITICAL gate | expected |", "|---|---|---|---|---|"]
+          ok = True
+          for n, (label, want) in cases.items():
+              st = [state(n, g) for g in ghsas]
+              rc = int(open(f"rc-{n}").read())
+              good = all(s.startswith(want) for s in st)
+              ok &= good
+              rows.append(f"| {n}. {label} | " + " | ".join(st) + f" | {'FAIL' if rc else 'PASS'} | {'✅' if good else '❌'} |")
+          txt = "\n".join(["## ethereum-staking-widget: VEX scope filter", ""] + rows + ["", "**TEST: PASS**" if ok else "**TEST: FAIL**"])
+          print(txt)
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(txt + "\n")
+          sys.exit(0 if ok else 1)
+          PY
