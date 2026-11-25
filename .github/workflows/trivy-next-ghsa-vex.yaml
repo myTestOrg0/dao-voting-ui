@@ -1,16 +1,19 @@
-# TEST: are the production Next.js GHSA entries (lidofinance/vex pkg/npm/next/vex.json)
-# applied by Trivy to the REAL SI widget images?
+# TEST: does Trivy suppress the production Next.js GHSA entries
+# (lidofinance/vex pkg/npm/next/vex.json) in the REAL SI widget images?
 #
-# - Images: built from the public lidofinance/ethereum-staking-widget and
-#   lidofinance/staking-vault-widget (develop), scanned like the release workflow:
-#   docker save -> trivy image --input.
-# - VEX: byte-identical copy of the prod file on myTestOrg0/vexel-private,
-#   branch add-prod-next-vex (sha256 checked below). Trivy takes a repo manifest only
-#   from the default branch, so the branch is laid into Trivy's VEX cache in the same
-#   layout `trivy vex repo download` produces, and the scan runs with
-#   --skip-vex-repo-update. (Token download itself was proven by trivy-private-vex.yaml.)
-# - Checked both ways Trivy can get the statements: `--vex repo` (Harbor / repo mode)
-#   and `--vex <file>` (PR #34 helper mode).
+# Read the steps in order, each prints Trivy's own table (CRITICAL only):
+#   0. VEX statements used      - what the prod file says
+#   1. Scan WITHOUT VEX          - both GHSA are reported, gate FAILS
+#   2. Scan WITH prod VEX        - both GHSA move to "Suppressed Vulnerabilities", gate PASSES
+#   3. Control: VEX for 12.3.6   - same file, other version: nothing suppressed, gate FAILS
+# The job summary has the same result as one before/after table.
+#
+# Image: built from the public widget repo (develop) with its own Dockerfile,
+# scanned like the release workflow (docker save -> trivy image --input).
+# VEX: byte-identical copy of the prod file (sha256 checked) on
+# myTestOrg0/vexel-private branch add-prod-next-vex, read by Trivy as a VEX repository
+# (--vex repo). Trivy takes a repo manifest only from the default branch, so the branch
+# is laid into Trivy's VEX cache in the layout `trivy vex repo download` produces.
 name: Trivy Next GHSA VEX test
 
 on:
@@ -26,11 +29,12 @@ env:
   TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
   VEX_BRANCH: add-prod-next-vex
   VEX_FILE_SHA256: 7e0e3b6407657e85c6b362430a221d96fd0f6bfbc87e526326d4be06f25e3c99
-  GHSAS: GHSA-2xp9-vwfh-vxw4 GHSA-2464-fhr4-w9xw
-  NEXT_PURL: pkg:npm/next@12.3.7
+  # Same gate as the release workflow: fail on CRITICAL.
+  SCAN: trivy image --input image.tar --cache-dir trivy-cache --scanners vuln --severity CRITICAL --exit-code 1
 
 jobs:
   scan:
+    name: ${{ matrix.widget }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -38,7 +42,7 @@ jobs:
       matrix:
         widget: [ethereum-staking-widget, staking-vault-widget]
     steps:
-      - name: Checkout widget (public, develop)
+      - name: Prepare - checkout widget (public, develop)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: lidofinance/${{ matrix.widget }}
@@ -46,23 +50,24 @@ jobs:
           path: widget
           persist-credentials: false
 
-      - name: Build image (widget's own Dockerfile)
-        working-directory: widget
+      - name: Prepare - build image with the widget's Dockerfile
         run: |
-          echo "widget commit: $(git rev-parse HEAD)"
-          docker build -t "local-build:${{ matrix.widget }}" .
-          docker save -o "$RUNNER_TEMP/image.tar" "local-build:${{ matrix.widget }}"
+          echo "widget commit: $(git -C widget rev-parse HEAD)"
+          docker build -q -t "local-build:${{ matrix.widget }}" widget
+          docker save -o image.tar "local-build:${{ matrix.widget }}"
+          echo "next version in image:"
+          docker run --rm --entrypoint node "local-build:${{ matrix.widget }}" -p "require('next/package.json').version"
 
-      - name: Install Trivy (pinned, checksum-verified)
+      - name: Prepare - install Trivy (pinned, checksum-verified)
         run: |
-          cd "$RUNNER_TEMP"
-          curl -fsSLo trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          echo "${TRIVY_SHA256}  trivy.tgz" | sha256sum -c -
-          tar xzf trivy.tgz trivy
-          sudo install -m 0755 trivy /usr/local/bin/trivy
+          curl -fsSLo "$RUNNER_TEMP/trivy.tgz" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tgz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
+          sudo install -m 0755 "$RUNNER_TEMP/trivy" /usr/local/bin/trivy
           trivy --version
+          trivy image --download-db-only --cache-dir trivy-cache
 
-      - name: Checkout VEX mirror branch (private)
+      - name: Prepare - checkout VEX mirror (private)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: myTestOrg0/vexel-private
@@ -71,10 +76,9 @@ jobs:
           path: vexsrc
           persist-credentials: false
 
-      - name: Lay VEX branch into Trivy cache
+      - name: Prepare - register VEX repository in Trivy
         run: |
-          echo "${VEX_FILE_SHA256}  vexsrc/pkg/npm/next/vex.json" | sha256sum -c -
-          R="$RUNNER_TEMP/cache/vex/repositories/vexel-private"
+          R="trivy-cache/vex/repositories/vexel-private"
           mkdir -p "$R/0.1" "$HOME/.trivy/vex"
           cp vexsrc/vex-repository.json "$R/"
           (cd vexsrc && git archive HEAD) | tar -x -C "$R/0.1"
@@ -85,51 +89,58 @@ jobs:
               url: https://github.com/myTestOrg0/vexel-private
               enabled: true
           YAML
-          trivy vex repo list
-          ls -la "$R/0.1/pkg/npm/next"
+          # Control VEX: the same prod file, only the product version changed to 12.3.6.
+          sed 's/pkg:npm\/next@12.3.7/pkg:npm\/next@12.3.6/' vexsrc/pkg/npm/next/vex.json > control-12.3.6.json
 
-      - name: Baseline scan (no VEX)
+      - name: "0. VEX statements used (prod pkg/npm/next/vex.json)"
         run: |
-          trivy image --input "$RUNNER_TEMP/image.tar" --cache-dir "$RUNNER_TEMP/cache" \
-            --scanners vuln --format json -o baseline.json
+          echo "${VEX_FILE_SHA256}  vexsrc/pkg/npm/next/vex.json" | sha256sum -c -
+          jq -r '.statements[] | "\(.vulnerability.name)  product=\(.products[0]["@id"])  status=\(.status)  justification=\(.justification)"' vexsrc/pkg/npm/next/vex.json
 
-      - name: Scan with --vex repo
+      - name: "1. Scan WITHOUT VEX - expect both GHSA reported, gate FAIL"
         run: |
-          trivy image --input "$RUNNER_TEMP/image.tar" --cache-dir "$RUNNER_TEMP/cache" \
-            --skip-db-update --scanners vuln --vex repo --skip-vex-repo-update \
-            --show-suppressed --format json -o with-vex-repo.json
+          rc=0; $SCAN --skip-db-update --format json -o r1.json || rc=$?
+          trivy convert --format table r1.json
+          echo "gate exit code: $rc"; echo "$rc" > rc1
 
-      - name: Scan with --vex <file> (prod file as is, custom fields included)
+      - name: "2. Scan WITH prod VEX (--vex repo) - expect both GHSA suppressed, gate PASS"
         run: |
-          trivy image --input "$RUNNER_TEMP/image.tar" --cache-dir "$RUNNER_TEMP/cache" \
-            --skip-db-update --scanners vuln --vex vexsrc/pkg/npm/next/vex.json \
-            --show-suppressed --format json -o with-vex-file.json
+          rc=0; $SCAN --skip-db-update --vex repo --skip-vex-repo-update --show-suppressed --format json -o r2.json || rc=$?
+          trivy convert --format table --show-suppressed r2.json
+          echo "gate exit code: $rc"; echo "$rc" > rc2
 
-      - name: Assert
+      - name: "3. Control: VEX for next@12.3.6 - expect nothing suppressed, gate FAIL"
+        run: |
+          rc=0; $SCAN --skip-db-update --vex control-12.3.6.json --show-suppressed --format json -o r3.json || rc=$?
+          trivy convert --format table --show-suppressed r3.json
+          echo "gate exit code: $rc"; echo "$rc" > rc3
+
+      - name: Result
         env:
           WIDGET: ${{ matrix.widget }}
         run: |
           python3 - <<'PY'
           import json, os, sys
-          ghsas = os.environ["GHSAS"].split(); purl = os.environ["NEXT_PURL"]
-          def res(f): return json.load(open(f)).get("Results") or []
-          def active(f): return [(v["VulnerabilityID"], v["PkgIdentifier"].get("PURL"), r["Target"])
-                                 for r in res(f) for v in (r.get("Vulnerabilities") or []) if v["VulnerabilityID"] in ghsas]
-          def supp(f): return [(m["Finding"]["VulnerabilityID"], m["Finding"]["PkgIdentifier"].get("PURL"), m["Status"], m["Source"])
-                               for r in res(f) for m in (r.get("ExperimentalModifiedFindings") or [])
-                               if m["Finding"].get("VulnerabilityID") in ghsas]
-          base = active("baseline.json")
-          out = [f"## {os.environ['WIDGET']}: Next.js GHSA VEX", "", "**Baseline (no VEX), active:**"]
-          out += [f"- `{i}` {p} in `{t}`" for i, p, t in base] or ["- NONE"]
-          ok = {g for g, _, _ in base} == set(ghsas) and all(p == purl for _, p, _ in base)
-          for f, want in (("with-vex-repo.json", "VEX Repository: vexel-private"), ("with-vex-file.json", "vex.json")):
-              a, s = active(f), supp(f)
-              out += ["", f"**{f}:** active {len(a)}, suppressed {len(s)}"]
-              out += [f"- `{i}` {p} → {st} ({src})" for i, p, st, src in s]
-              out += [f"- STILL ACTIVE `{i}` {p} in `{t}`" for i, p, t in a]
-              ok &= not a and len(s) == len(base) and all(want in src for *_, src in s)
-          out += ["", "**RESULT: PASS**" if ok else "**RESULT: FAIL**"]
-          txt = "\n".join(out); print(txt)
+          ghsas = ["GHSA-2xp9-vwfh-vxw4", "GHSA-2464-fhr4-w9xw"]
+          def load(n): return json.load(open(f"r{n}.json")).get("Results") or []
+          def rc(n): return int(open(f"rc{n}").read())
+          def state(n, g):
+              for r in load(n):
+                  for v in r.get("Vulnerabilities") or []:
+                      if v["VulnerabilityID"] == g: return f"🔴 reported (next@{v['InstalledVersion']})"
+                  for m in r.get("ExperimentalModifiedFindings") or []:
+                      if m["Finding"]["VulnerabilityID"] == g: return f"🟢 suppressed: {m['Status']}"
+              return "⚪ absent"
+          cols = ["1. without VEX", "2. with prod VEX", "3. control VEX 12.3.6"]
+          rows = ["| | " + " | ".join(cols) + " |", "|---|---|---|---|"]
+          for g in ghsas:
+              rows.append(f"| {g} | " + " | ".join(state(n, g) for n in (1, 2, 3)) + " |")
+          rows.append("| CRITICAL gate | " + " | ".join("FAIL" if rc(n) else "PASS" for n in (1, 2, 3)) + " |")
+          ok = (all(state(1, g).startswith("🔴") for g in ghsas)
+                and all(state(2, g).startswith("🟢") for g in ghsas)
+                and all(state(3, g).startswith("🔴") for g in ghsas))
+          txt = "\n".join([f"## {os.environ['WIDGET']}", ""] + rows + ["", "**TEST: PASS**" if ok else "**TEST: FAIL**"])
+          print(txt)
           open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(txt + "\n")
           sys.exit(0 if ok else 1)
           PY
@@ -139,5 +150,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trivy-reports-${{ matrix.widget }}
-          path: "*.json"
+          path: |
+            r1.json
+            r2.json
+            r3.json
           if-no-files-found: ignore
