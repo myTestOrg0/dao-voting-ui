@@ -1,0 +1,14 @@
+# TEST: calls the release-scan demo with the proposed Lido VEX scope filter.
+name: VEX scope demo
+
+on:
+  push:
+    branches: [test/vex-scope]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    uses: myTestOrg0/actions/.github/workflows/k8s-trivy-vex-scope-demo.yml@feat/vex-scope-filter
