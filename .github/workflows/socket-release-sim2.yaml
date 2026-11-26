@@ -25,6 +25,10 @@ jobs:
             ref: sockettest/release-scan
             target: prod
             with_key: true
+          - scenario: default-branch
+            ref: develop
+            target: prod
+            with_key: true
           - scenario: clean
             ref: sockettest/release-fx-clean
             target: staging
