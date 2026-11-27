@@ -29,10 +29,6 @@ jobs:
             ref: develop
             target: prod
             with_key: true
-          - scenario: main-branch
-            ref: main
-            target: prod
-            with_key: true
           - scenario: clean
             ref: sockettest/release-fx-clean
             target: staging
